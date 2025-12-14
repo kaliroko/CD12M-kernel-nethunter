@@ -206,7 +206,7 @@ static void update_rq_clock_task(struct rq *rq, s64 delta)
 
 #if defined(CONFIG_IRQ_TIME_ACCOUNTING) || defined(CONFIG_PARAVIRT_TIME_ACCOUNTING)
 	if ((irq_delta + steal) && sched_feat(NONTASK_CAPACITY))
-		sched_rt_avg_update(rq, irq_delta + steal);
+		update_irq_load_avg(rq, irq_delta + steal);
 #endif
 }
 
@@ -676,23 +676,6 @@ bool sched_can_stop_tick(struct rq *rq)
 	return true;
 }
 #endif /* CONFIG_NO_HZ_FULL */
-
-void sched_avg_update(struct rq *rq)
-{
-	s64 period = sched_avg_period();
-
-	while ((s64)(rq_clock(rq) - rq->age_stamp) > period) {
-		/*
-		 * Inline assembly required to prevent the compiler
-		 * optimising this loop into a divmod call.
-		 * See __iter_div_u64_rem() for another example of this.
-		 */
-		asm("" : "+rm" (rq->age_stamp));
-		rq->age_stamp += period;
-		rq->rt_avg /= 2;
-	}
-}
-
 #endif /* CONFIG_SMP */
 
 #if defined(CONFIG_RT_GROUP_SCHED) || (defined(CONFIG_FAIR_GROUP_SCHED) && \
@@ -954,8 +937,10 @@ static struct rq *move_queued_task(struct rq *rq, struct rq_flags *rf,
 
 	p->on_rq = TASK_ON_RQ_MIGRATING;
 	dequeue_task(rq, p, DEQUEUE_NOCLOCK);
+	rq_unpin_lock(rq, rf);
+	double_lock_balance(rq, cpu_rq(new_cpu));
 	set_task_cpu(p, new_cpu);
-	rq_unlock(rq, rf);
+	double_rq_unlock(cpu_rq(new_cpu), rq);
 
 	rq = cpu_rq(new_cpu);
 
@@ -2524,8 +2509,8 @@ void wake_up_new_task(struct task_struct *p)
 	update_rq_clock(rq);
 	post_init_entity_util_avg(&p->se);
 
-	activate_task(rq, p, ENQUEUE_NOCLOCK);
 	walt_mark_task_starting(p);
+	activate_task(rq, p, ENQUEUE_NOCLOCK);
 
 	p->on_rq = TASK_ON_RQ_QUEUED;
 	trace_sched_wakeup_new(p);
@@ -3097,6 +3082,9 @@ void scheduler_tick(void)
 	trigger_load_balance(rq);
 #endif
 	rq_last_tick_reset(rq);
+
+	if (curr->sched_class == &fair_sched_class)
+		check_for_migration(rq, curr);
 }
 
 #ifdef CONFIG_NO_HZ_FULL
@@ -4779,6 +4767,16 @@ static int get_user_cpu_mask(unsigned long __user *user_mask_ptr, unsigned len,
 	return copy_from_user(new_mask, user_mask_ptr, len) ? -EFAULT : 0;
 }
 
+long sched_setaffinity_userspace(pid_t pid, const struct cpumask *in_mask)
+{
+	if (unlikely(!cpumask_intersects(&min_cap_cpu_mask, in_mask) &&
+	    cpumask_weight(in_mask) == 1)) {
+		return 0;
+	}
+
+	return sched_setaffinity(pid, in_mask);
+}
+
 /**
  * sys_sched_setaffinity - set the CPU affinity of a process
  * @pid: pid of the process
@@ -4798,7 +4796,7 @@ SYSCALL_DEFINE3(sched_setaffinity, pid_t, pid, unsigned int, len,
 
 	retval = get_user_cpu_mask(user_mask_ptr, len, new_mask);
 	if (retval == 0)
-		retval = sched_setaffinity(pid, new_mask);
+		retval = sched_setaffinity_userspace(pid, new_mask);
 	free_cpumask_var(new_mask);
 	return retval;
 }
@@ -5618,13 +5616,6 @@ void set_rq_offline(struct rq *rq)
 	}
 }
 
-static void set_cpu_rq_start_time(unsigned int cpu)
-{
-	struct rq *rq = cpu_rq(cpu);
-
-	rq->age_stamp = sched_clock_cpu(cpu);
-}
-
 /*
  * used to mark begin/end of suspend/resume:
  */
@@ -5757,7 +5748,6 @@ static void sched_rq_cpu_starting(unsigned int cpu)
 
 int sched_cpu_starting(unsigned int cpu)
 {
-	set_cpu_rq_start_time(cpu);
 	sched_rq_cpu_starting(cpu);
 	return 0;
 }
@@ -5978,6 +5968,7 @@ void __init sched_init(void)
 		rq->cpu_capacity = rq->cpu_capacity_orig = SCHED_CAPACITY_SCALE;
 		rq->balance_callback = NULL;
 		rq->active_balance = 0;
+		rq->push_task = NULL;
 		rq->next_balance = jiffies;
 		rq->push_cpu = 0;
 		rq->cpu = i;
@@ -5989,6 +5980,7 @@ void __init sched_init(void)
 		rq->cur_irqload = 0;
 		rq->avg_irqload = 0;
 		rq->irqload_ts = 0;
+		rq->is_busy = CPU_BUSY_CLR;
 #endif
 
 		INIT_LIST_HEAD(&rq->cfs_tasks);
@@ -6030,13 +6022,14 @@ void __init sched_init(void)
 	if (cpu_isolated_map == NULL)
 		zalloc_cpumask_var(&cpu_isolated_map, GFP_NOWAIT);
 	idle_thread_set_boot_cpu();
-	set_cpu_rq_start_time(smp_processor_id());
 #endif
 	init_sched_fair_class();
 
 	init_schedstats();
 
 	scheduler_running = 1;
+
+	cpumask_copy(&min_cap_cpu_mask, cpu_possible_mask);
 }
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP

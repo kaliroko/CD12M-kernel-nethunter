@@ -1201,10 +1201,8 @@ static ssize_t store_uevent(struct module_attribute *mattr,
 			    struct module_kobject *mk,
 			    const char *buffer, size_t count)
 {
-	int rc;
-
-	rc = kobject_synth_uevent(&mk->kobj, buffer, count);
-	return rc ? rc : count;
+	kobject_synth_uevent(&mk->kobj, buffer, count);
+	return count;
 }
 
 struct module_attribute module_uevent =
