@@ -1274,19 +1274,13 @@ static bool ext4_dummy_context(struct inode *inode)
 	return DUMMY_ENCRYPTION_ENABLED(EXT4_SB(inode->i_sb));
 }
 
-static unsigned ext4_max_namelen(struct inode *inode)
-{
-	return S_ISLNK(inode->i_mode) ? inode->i_sb->s_blocksize :
-		EXT4_NAME_LEN;
-}
-
 static const struct fscrypt_operations ext4_cryptops = {
 	.key_prefix		= "ext4:",
 	.get_context		= ext4_get_context,
 	.set_context		= ext4_set_context,
 	.dummy_context		= ext4_dummy_context,
 	.empty_dir		= ext4_empty_dir,
-	.max_namelen		= ext4_max_namelen,
+	.max_namelen		= EXT4_NAME_LEN,
 };
 #endif
 
@@ -5404,10 +5398,21 @@ static int ext4_statfs(struct dentry *dentry, struct kstatfs *buf)
 		percpu_counter_sum_positive(&sbi->s_dirtyclusters_counter);
 	/* prevent underflow in case that few free space is available */
 	buf->f_bfree = EXT4_C2B(sbi, max_t(s64, bfree, 0));
-	buf->f_bavail = buf->f_bfree -
-			(ext4_r_blocks_count(es) + resv_blocks);
-	if (buf->f_bfree < (ext4_r_blocks_count(es) + resv_blocks))
-		buf->f_bavail = 0;
+#ifdef CONFIG_EXT4_RESERVE_SPACE_FILTER
+	/*reserved space is visible if have permission */
+	if (check_have_permission(0)) {
+		buf->f_bavail = buf->f_bfree - resv_blocks;
+		if (buf->f_bfree < resv_blocks)
+			buf->f_bavail = 0;
+	} else {
+#endif
+		buf->f_bavail = buf->f_bfree -
+		(ext4_r_blocks_count(es) + resv_blocks);
+		if (buf->f_bfree < (ext4_r_blocks_count(es) + resv_blocks))
+			buf->f_bavail = 0;
+#ifdef CONFIG_EXT4_RESERVE_SPACE_FILTER
+	}
+#endif
 	buf->f_files = le32_to_cpu(es->s_inodes_count);
 	buf->f_ffree = percpu_counter_sum_positive(&sbi->s_freeinodes_counter);
 	buf->f_namelen = EXT4_NAME_LEN;
