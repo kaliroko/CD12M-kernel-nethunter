@@ -29,6 +29,9 @@
 #include <linux/completion.h>
 #include <linux/cpufreq.h>
 #include <linux/irq_work.h>
+#ifdef CONFIG_TRUSTY
+#include <linux/irqdomain.h>
+#endif
 
 #include <linux/atomic.h>
 #include <asm/bugs.h>
@@ -42,7 +45,6 @@
 #include <asm/mmu_context.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
-#include <asm/procinfo.h>
 #include <asm/processor.h>
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -82,7 +84,15 @@ enum ipi_msg_type {
 	 * not be usable by the kernel. Please keep the above limited
 	 * to at most 8 entries.
 	 */
+#ifdef CONFIG_TRUSTY
+	IPI_CUSTOM_FIRST,
+	IPI_CUSTOM_LAST = 15,
+#endif
 };
+
+#ifdef CONFIG_TRUSTY
+struct irq_domain *ipi_custom_irq_domain;
+#endif
 
 static DECLARE_COMPLETION(cpu_running);
 
@@ -103,40 +113,12 @@ static unsigned long get_arch_pgd(pgd_t *pgd)
 #endif
 }
 
-#if defined(CONFIG_BIG_LITTLE) && defined(CONFIG_HARDEN_BRANCH_PREDICTOR)
-static int secondary_biglittle_prepare(unsigned int cpu)
-{
-	if (!cpu_vtable[cpu])
-		cpu_vtable[cpu] = kzalloc(sizeof(*cpu_vtable[cpu]), GFP_KERNEL);
-
-	return cpu_vtable[cpu] ? 0 : -ENOMEM;
-}
-
-static void secondary_biglittle_init(void)
-{
-	init_proc_vtable(lookup_processor(read_cpuid_id())->proc);
-}
-#else
-static int secondary_biglittle_prepare(unsigned int cpu)
-{
-	return 0;
-}
-
-static void secondary_biglittle_init(void)
-{
-}
-#endif
-
 int __cpu_up(unsigned int cpu, struct task_struct *idle)
 {
 	int ret;
 
 	if (!smp_ops.smp_boot_secondary)
 		return -ENOSYS;
-
-	ret = secondary_biglittle_prepare(cpu);
-	if (ret)
-		return ret;
 
 	/*
 	 * We need to tell the secondary core where to find
@@ -389,8 +371,6 @@ asmlinkage void secondary_start_kernel(void)
 	struct mm_struct *mm = &init_mm;
 	unsigned int cpu;
 
-	secondary_biglittle_init();
-
 	/*
 	 * The identity mapping is uncached (strongly ordered), so
 	 * switch away from it before attempting any exclusive accesses.
@@ -619,6 +599,9 @@ static void ipi_complete(unsigned int cpu)
 	complete(per_cpu(cpu_completion, cpu));
 }
 
+#ifdef CONFIG_SPRD_SYSDUMP
+	extern void sysdump_ipi(struct pt_regs *regs);
+#endif
 /*
  * Main handler for inter-processor interrupts
  */
@@ -661,6 +644,9 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
 
 	case IPI_CPU_STOP:
 		irq_enter();
+		#ifdef CONFIG_SPRD_SYSDUMP
+			sysdump_ipi(regs);
+		#endif
 		ipi_cpu_stop(cpu);
 		irq_exit();
 		break;
@@ -688,8 +674,17 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
 		break;
 
 	default:
-		pr_crit("CPU%u: Unknown IPI message 0x%x\n",
-		        cpu, ipinr);
+#ifdef CONFIG_TRUSTY
+		if (ipi_custom_irq_domain &&
+		    ipinr >= IPI_CUSTOM_FIRST && ipinr <= IPI_CUSTOM_LAST)
+			handle_domain_irq(ipi_custom_irq_domain, ipinr, regs);
+		else
+			pr_crit("CPU%u: Unknown IPI message 0x%x\n",
+				cpu, ipinr);
+#else
+		pr_crit("CPU%u: Unknown IPI message 0x%x\n", cpu, ipinr);
+
+#endif
 		break;
 	}
 
@@ -697,6 +692,87 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
 		trace_ipi_exit_rcuidle(ipi_types[ipinr]);
 	set_irq_regs(old_regs);
 }
+
+#ifdef CONFIG_TRUSTY
+static void custom_ipi_enable(struct irq_data *data)
+{
+	/*
+	 * Always trigger a new ipi on enable. This only works for clients
+	 * that then clear the ipi before unmasking interrupts.
+	 */
+	smp_cross_call(cpumask_of(smp_processor_id()), data->hwirq);
+}
+
+static void custom_ipi_disable(struct irq_data *data)
+{
+}
+
+static struct irq_chip custom_ipi_chip = {
+	.name			= "CustomIPI",
+	.irq_enable		= custom_ipi_enable,
+	.irq_disable		= custom_ipi_disable,
+};
+
+static void handle_custom_ipi_irq(struct irq_desc *desc)
+{
+	if (!desc->action) {
+		pr_crit("CPU%u: Unknown IPI message 0x%x, no custom handler\n",
+			smp_processor_id(), irq_desc_get_irq(desc));
+		return;
+	}
+
+	if (!cpumask_test_cpu(smp_processor_id(), desc->percpu_enabled))
+		return; /* IPIs may not be maskable in hardware */
+
+	handle_percpu_devid_irq(desc);
+}
+
+static int custom_ipi_domain_map(struct irq_domain *d, unsigned int irq,
+				 irq_hw_number_t hw)
+{
+	if (hw < IPI_CUSTOM_FIRST || hw > IPI_CUSTOM_LAST) {
+		pr_err("hwirq-%u is not in supported range for CustomIPI IRQ domain\n",
+		       (uint)hw);
+		return -EINVAL;
+	}
+
+	irq_set_percpu_devid(irq);
+	irq_set_chip_and_handler(irq, &custom_ipi_chip, handle_custom_ipi_irq);
+	irq_set_status_flags(irq, IRQ_NOAUTOEN);
+
+	return 0;
+}
+
+static const struct irq_domain_ops custom_ipi_domain_ops = {
+	.map = custom_ipi_domain_map,
+};
+
+static int __init smp_custom_ipi_init(void)
+{
+	struct device_node *np;
+
+	np = of_find_compatible_node(NULL, NULL, "android,CustomIPI");
+	if (np) {
+		/*
+		 * Register linear irq doman to cover the whole IPI range
+		 * even though we are only using part of it. Proper IRQ
+		 * range check will be done by an implementation of mapping
+		 * routine.
+		 */
+		pr_info("Initilizing CustomIPI irq domain\n");
+		ipi_custom_irq_domain =
+			irq_domain_add_linear(np,
+					      IPI_CUSTOM_LAST + 1,
+					      &custom_ipi_domain_ops,
+					      NULL);
+		WARN_ON(!ipi_custom_irq_domain);
+		return 0;
+	}
+
+	return 0;
+}
+core_initcall(smp_custom_ipi_init);
+#endif
 
 void smp_send_reschedule(int cpu)
 {
@@ -720,21 +796,6 @@ void smp_send_stop(void)
 
 	if (num_online_cpus() > 1)
 		pr_warn("SMP: failed to stop secondary CPUs\n");
-}
-
-/* In case panic() and panic() called at the same time on CPU1 and CPU2,
- * and CPU 1 calls panic_smp_self_stop() before crash_smp_send_stop()
- * CPU1 can't receive the ipi irqs from CPU2, CPU1 will be always online,
- * kdump fails. So split out the panic_smp_self_stop() and add
- * set_cpu_online(smp_processor_id(), false).
- */
-void panic_smp_self_stop(void)
-{
-	pr_debug("CPU %u will stop doing anything useful since another CPU has paniced\n",
-	         smp_processor_id());
-	set_cpu_online(smp_processor_id(), false);
-	while (1)
-		cpu_relax();
 }
 
 /*

@@ -32,6 +32,7 @@
 #include <linux/compiler.h>
 #include <linux/sort.h>
 #include <linux/psci.h>
+#include <linux/of_fdt.h>
 
 #include <asm/unified.h>
 #include <asm/cp15.h>
@@ -115,11 +116,6 @@ EXPORT_SYMBOL(elf_hwcap2);
 
 #ifdef MULTI_CPU
 struct processor processor __ro_after_init;
-#if defined(CONFIG_BIG_LITTLE) && defined(CONFIG_HARDEN_BRANCH_PREDICTOR)
-struct processor *cpu_vtable[NR_CPUS] = {
-	[0] = &processor,
-};
-#endif
 #endif
 #ifdef MULTI_TLB
 struct cpu_tlb_fns cpu_tlb __ro_after_init;
@@ -672,33 +668,28 @@ static void __init smp_build_mpidr_hash(void)
 }
 #endif
 
-/*
- * locate processor in the list of supported processor types.  The linker
- * builds this table for us from the entries in arch/arm/mm/proc-*.S
- */
-struct proc_info_list *lookup_processor(u32 midr)
-{
-	struct proc_info_list *list = lookup_processor_type(midr);
-
-	if (!list) {
-		pr_err("CPU%u: configuration botched (ID %08x), CPU halted\n",
-		       smp_processor_id(), midr);
-		while (1)
-		/* can't use cpu_relax() here as it may require MMU setup */;
-	}
-
-	return list;
-}
-
 static void __init setup_processor(void)
 {
-	unsigned int midr = read_cpuid_id();
-	struct proc_info_list *list = lookup_processor(midr);
+	struct proc_info_list *list;
+
+	/*
+	 * locate processor in the list of supported processor
+	 * types.  The linker builds this table for us from the
+	 * entries in arch/arm/mm/proc-*.S
+	 */
+	list = lookup_processor_type(read_cpuid_id());
+	if (!list) {
+		pr_err("CPU configuration botched (ID %08x), unable to continue.\n",
+		       read_cpuid_id());
+		while (1);
+	}
 
 	cpu_name = list->cpu_name;
 	__cpu_architecture = __get_cpu_architecture();
 
-	init_proc_vtable(list->proc);
+#ifdef MULTI_CPU
+	processor = *list->proc;
+#endif
 #ifdef MULTI_TLB
 	cpu_tlb = *list->tlb;
 #endif
@@ -710,7 +701,7 @@ static void __init setup_processor(void)
 #endif
 
 	pr_info("CPU: %s [%08x] revision %d (ARMv%s), cr=%08lx\n",
-		list->cpu_name, midr, midr & 15,
+		cpu_name, read_cpuid_id(), read_cpuid_id() & 15,
 		proc_arch[cpu_architecture()], get_cr());
 
 	snprintf(init_utsname()->machine, __NEW_UTS_LEN + 1, "%s%c",
@@ -1237,8 +1228,13 @@ static int c_show(struct seq_file *m, void *v)
 		 */
 		seq_printf(m, "processor\t: %d\n", i);
 		cpuid = is_smp() ? per_cpu(cpu_data, i).cpuid : read_cpuid_id();
+
+#if defined(CONFIG_AARCH32_SHOW_AARCH64_CPUINFO)
+		seq_printf(m, "model name\t: ARMv8 Processor\n");
+#else
 		seq_printf(m, "model name\t: %s rev %d (%s)\n",
 			   cpu_name, cpuid & 15, elf_platform);
+#endif
 
 #if defined(CONFIG_SMP)
 		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
@@ -1261,8 +1257,13 @@ static int c_show(struct seq_file *m, void *v)
 				seq_printf(m, "%s ", hwcap2_str[j]);
 
 		seq_printf(m, "\nCPU implementer\t: 0x%02x\n", cpuid >> 24);
+
+#if defined(CONFIG_AARCH32_SHOW_AARCH64_CPUINFO)
+		seq_printf(m, "CPU architecture: 8\n");
+#else
 		seq_printf(m, "CPU architecture: %s\n",
 			   proc_arch[cpu_architecture()]);
+#endif
 
 		if ((cpuid & 0x0008f000) == 0x00000000) {
 			/* pre-ARM7 */
@@ -1283,7 +1284,10 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "CPU revision\t: %d\n\n", cpuid & 15);
 	}
 
-	seq_printf(m, "Hardware\t: %s\n", machine_name);
+	if (of_flat_dt_get_cpuinfo_hw())
+		seq_printf(m, "Hardware\t: %s\n", of_flat_dt_get_cpuinfo_hw());
+	else
+		seq_printf(m, "Hardware\t: %s\n", machine_name);
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
 	seq_printf(m, "Serial\t\t: %s\n", system_serial);
 
