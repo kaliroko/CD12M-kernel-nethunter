@@ -275,6 +275,7 @@ extern int sysctl_tcp_autocorking;
 extern int sysctl_tcp_invalid_ratelimit;
 extern int sysctl_tcp_pacing_ss_ratio;
 extern int sysctl_tcp_pacing_ca_ratio;
+extern int sysctl_tcp_enable_nuke_addr;
 extern int sysctl_tcp_default_init_rwnd;
 
 extern atomic_long_t tcp_memory_allocated;
@@ -1623,7 +1624,6 @@ static inline void tcp_write_queue_purge(struct sock *sk)
 	tcp_clear_all_retrans_hints(tcp_sk(sk));
 	tcp_init_send_head(sk);
 	tcp_sk(sk)->packets_out = 0;
-	inet_csk(sk)->icsk_backoff = 0;
 }
 
 static inline struct sk_buff *tcp_write_queue_head(const struct sock *sk)

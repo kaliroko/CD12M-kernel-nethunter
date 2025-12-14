@@ -45,6 +45,13 @@ enum cm_event_types {
 	CM_EVENT_OTHERS,
 };
 
+enum cm_charge_status {
+	CM_CHARGE_TEMP_ABNORMAL = BIT(0),
+	CM_CHARGE_VOLTAGE_ABNORMAL = BIT(1),
+	CM_CHARGE_HEALTH_ABNORMAL = BIT(2),
+	CM_CHARGE_DURATION_ABNORMAL = BIT(3),
+};
+
 /**
  * struct charger_cable
  * @extcon_name: the name of extcon device.
@@ -66,8 +73,7 @@ struct charger_cable {
 	const char *name;
 
 	/* The charger-manager use Extcon framework */
-	struct extcon_specific_cable_nb extcon_dev;
-	struct work_struct wq;
+	struct extcon_dev *extcon_dev;
 	struct notifier_block nb;
 
 	/* The state of charger cable */
@@ -122,10 +128,18 @@ struct charger_regulator {
 	struct attribute_group attr_g;
 	struct device_attribute attr_name;
 	struct device_attribute attr_state;
+	struct device_attribute attr_stop_charge;
 	struct device_attribute attr_externally_control;
-	struct attribute *attrs[4];
+	struct attribute *attrs[5];
 
 	struct charger_manager *cm;
+};
+
+struct charger_jeita_table {
+	int temp;
+	int recovery_temp;
+	int current_ua;
+	int term_volt;
 };
 
 /**
@@ -140,6 +154,7 @@ struct charger_regulator {
  *	fullbatt_vchkdrop_ms, CM will restart charging.
  * @fullbatt_uV: voltage in microvolt
  *	If VBATT >= fullbatt_uV, it is assumed to be full.
+ * @fullbatt_uA: battery current in microamp
  * @fullbatt_soc: state of Charge in %
  *	If state of Charge >= fullbatt_soc, it is assumed to be full.
  * @fullbatt_full_capacity: full capacity measure
@@ -157,6 +172,7 @@ struct charger_regulator {
  * @temp_min : Minimum battery temperature for charging.
  * @temp_max : Maximum battery temperature for charging.
  * @temp_diff : Temperature difference to restart charging.
+ * @cap : Battery capacity report to user space.
  * @measure_battery_temp:
  *	true: measure battery temperature
  *	false: measure ambient temperature
@@ -167,6 +183,24 @@ struct charger_regulator {
  *	Maximum possible duration for discharging with charger cable
  *	after full-batt. If discharging duration exceed 'discharging
  *	max_duration_ms', cm start charging.
+ * @charger_status: Recording state of charge
+ * @trigger_cnt: The number of times the battery is fully charged
+ * @cap_one_time: The percentage of electricity is not
+ *	allowed to change by 1% in cm->desc->cap_one_time
+ * @trickle_time_out: If 99% lasts longer than it , will force set full statu
+ * @trickle_time: Record the charging time when battery
+ *	capacity is larger than 99%.
+ * @trickle_start_time: Record current time when battery capacity is 99%
+ * @update_capacity_time: Record the battery capacity update time
+ * @last_query_time: Record last time enter cm_batt_works
+ * @force_set_full: The flag is indicate whether
+ *	there is a mandatory setting of full status
+ * @shutdown_voltage: If it has dropped more than shutdown_voltage,
+ *	the phone will automatically shut down
+ * @wdt_interval: Watch dog time pre-load value
+ * @jeita_tab: Specify the jeita temperature table, which is used to
+ *	adjust the charging current according to the battery temperature.
+ * @jeita_tab_size: Specify the size of jeita temperature table.
  */
 struct charger_desc {
 	const char *psy_name;
@@ -177,6 +211,7 @@ struct charger_desc {
 	unsigned int fullbatt_vchkdrop_ms;
 	unsigned int fullbatt_vchkdrop_uV;
 	unsigned int fullbatt_uV;
+	unsigned int fullbatt_uA;
 	unsigned int fullbatt_soc;
 	unsigned int fullbatt_full_capacity;
 
@@ -195,10 +230,36 @@ struct charger_desc {
 	int temp_max;
 	int temp_diff;
 
+	int cap;
 	bool measure_battery_temp;
 
 	u32 charging_max_duration_ms;
 	u32 discharging_max_duration_ms;
+
+	u32 charge_voltage_max;
+	u32 charge_voltage_drop;
+
+	int charger_status;
+	int trigger_cnt;
+
+	u32 cap_one_time;
+
+	u32 trickle_time_out;
+	u64 trickle_time;
+	u64 trickle_start_time;
+
+	u64 update_capacity_time;
+	u64 last_query_time;
+
+	bool force_set_full;
+	u32 shutdown_voltage;
+
+	u32 wdt_interval;
+
+	int thm_adjust_cur;
+
+	struct charger_jeita_table *jeita_tab;
+	u32 jeita_tab_size;
 };
 
 #define PSY_NAME_MAX	30
@@ -225,6 +286,7 @@ struct charger_desc {
  *	saved status of battery before entering suspend-to-RAM
  * @charging_start_time: saved start time of enabling charging
  * @charging_end_time: saved end time of disabling charging
+ * @charging_status: saved charging status, 0 means charging normal
  */
 struct charger_manager {
 	struct list_head entry;
@@ -238,7 +300,7 @@ struct charger_manager {
 
 	unsigned long fullbatt_vchk_jiffies_at;
 	struct delayed_work fullbatt_vchk_work;
-
+	struct delayed_work cap_update_work;
 	int emergency_stop;
 
 	char psy_name_buf[PSY_NAME_MAX + 1];
@@ -247,6 +309,7 @@ struct charger_manager {
 
 	u64 charging_start_time;
 	u64 charging_end_time;
+	u32 charging_status;
 };
 
 #ifdef CONFIG_CHARGER_MANAGER

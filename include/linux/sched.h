@@ -489,7 +489,7 @@ struct sched_entity {
 };
 
 #ifdef CONFIG_SCHED_WALT
-#define RAVG_HIST_SIZE_MAX  5
+#define RAVG_HIST_SIZE_MAX  6
 
 /* ravg represents frequency scaled cpu-demand of tasks */
 struct ravg {
@@ -1810,6 +1810,7 @@ static inline void set_task_cpu(struct task_struct *p, unsigned int cpu)
 
 extern long sched_setaffinity(pid_t pid, const struct cpumask *new_mask);
 extern long sched_getaffinity(pid_t pid, struct cpumask *mask);
+extern long sched_setaffinity_userspace(pid_t pid, const struct cpumask *new_mask);
 
 #ifndef TASK_SIZE_OF
 #define TASK_SIZE_OF(tsk)	TASK_SIZE
