@@ -1162,6 +1162,9 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			if (unlikely(isolated_pageblocks))
 				mt = get_pageblock_migratetype(page);
 
+			if (is_migrate_highatomic_page(page))
+				mt = get_pageblock_migratetype(page);
+
 			if (bulkfree_pcp_prepare(page))
 				continue;
 
@@ -2115,12 +2118,14 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 {
 	int mt;
 	unsigned long max_managed, flags;
+	int move_num;
 
 	/*
 	 * Limit the number reserved to 1 pageblock or roughly 1% of a zone.
 	 * Check is race-prone but harmless.
 	 */
-	max_managed = (zone->managed_pages / 100) + pageblock_nr_pages;
+	//max_managed = (zone->managed_pages / 100) + pageblock_nr_pages;
+	max_managed = pageblock_nr_pages;
 	if (zone->nr_reserved_highatomic >= max_managed)
 		return;
 
@@ -2136,7 +2141,10 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 	    && !is_migrate_cma(mt)) {
 		zone->nr_reserved_highatomic += pageblock_nr_pages;
 		set_pageblock_migratetype(page, MIGRATE_HIGHATOMIC);
-		move_freepages_block(zone, page, MIGRATE_HIGHATOMIC, NULL);
+		move_num = move_freepages_block(zone, page,
+					MIGRATE_HIGHATOMIC, NULL);
+		__mod_zone_page_state(zone, NR_FREE_HIGHATOMIC_PAGES,
+					move_num);
 	}
 
 out_unlock:
@@ -2162,6 +2170,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 	struct page *page;
 	int order;
 	bool ret;
+	int moved_num = 0;
 
 	for_each_zone_zonelist_nodemask(zone, z, zonelist, ac->high_zoneidx,
 								ac->nodemask) {
@@ -2213,8 +2222,12 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 			 * may increase.
 			 */
 			set_pageblock_migratetype(page, ac->migratetype);
-			ret = move_freepages_block(zone, page, ac->migratetype,
-									NULL);
+			moved_num = move_freepages_block(zone, page,
+						ac->migratetype, NULL);
+			ret = moved_num;
+			__mod_zone_page_state(zone, NR_FREE_HIGHATOMIC_PAGES,
+						-moved_num);
+
 			if (ret) {
 				spin_unlock_irqrestore(&zone->lock, flags);
 				return ret;
@@ -2364,6 +2377,9 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 		alloced++;
 		if (is_migrate_cma(get_pcppage_migratetype(page)))
 			__mod_zone_page_state(zone, NR_FREE_CMA_PAGES,
+					      -(1 << order));
+		if (is_migrate_highatomic_page(page))
+			__mod_zone_page_state(zone, NR_FREE_HIGHATOMIC_PAGES,
 					      -(1 << order));
 	}
 
@@ -2971,7 +2987,7 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 	 * atomic reserve but it avoids a search.
 	 */
 	if (likely(!alloc_harder)) {
-		free_pages -= z->nr_reserved_highatomic;
+		free_pages -= zone_page_state(z, NR_FREE_HIGHATOMIC_PAGES);
 	} else {
 		/*
 		 * OOM victims can try even harder than normal ALLOC_HARDER
@@ -4694,7 +4710,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		" unevictable:%lu dirty:%lu writeback:%lu unstable:%lu\n"
 		" slab_reclaimable:%lu slab_unreclaimable:%lu\n"
 		" mapped:%lu shmem:%lu pagetables:%lu bounce:%lu\n"
-		" free:%lu free_pcp:%lu free_cma:%lu\n",
+		" free:%lu free_pcp:%lu free_cma:%lu free_highatomic:%lu\n",
 		global_node_page_state(NR_ACTIVE_ANON),
 		global_node_page_state(NR_INACTIVE_ANON),
 		global_node_page_state(NR_ISOLATED_ANON),
@@ -4713,7 +4729,8 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		global_zone_page_state(NR_BOUNCE),
 		global_zone_page_state(NR_FREE_PAGES),
 		free_pcp,
-		global_zone_page_state(NR_FREE_CMA_PAGES));
+		global_zone_page_state(NR_FREE_CMA_PAGES),
+		global_zone_page_state(NR_FREE_HIGHATOMIC_PAGES));
 
 	for_each_online_pgdat(pgdat) {
 		if (show_mem_node_skip(filter, pgdat->node_id, nodemask))
@@ -4796,6 +4813,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			" free_pcp:%lukB"
 			" local_pcp:%ukB"
 			" free_cma:%lukB"
+			" highatomic:%lukB"
 			"\n",
 			zone->name,
 			K(zone_page_state(zone, NR_FREE_PAGES)),
@@ -4816,7 +4834,8 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(zone_page_state(zone, NR_BOUNCE)),
 			K(free_pcp),
 			K(this_cpu_read(zone->pageset->pcp.count)),
-			K(zone_page_state(zone, NR_FREE_CMA_PAGES)));
+			K(zone_page_state(zone, NR_FREE_CMA_PAGES)),
+			K(zone_page_state(zone, NR_FREE_HIGHATOMIC_PAGES)));
 		printk("lowmem_reserve[]:");
 		for (i = 0; i < MAX_NR_ZONES; i++)
 			printk(KERN_CONT " %ld", zone->lowmem_reserve[i]);
