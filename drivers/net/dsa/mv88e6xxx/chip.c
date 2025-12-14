@@ -258,7 +258,6 @@ static irqreturn_t mv88e6xxx_g1_irq_thread_fn(int irq, void *dev_id)
 	unsigned int sub_irq;
 	unsigned int n;
 	u16 reg;
-	u16 ctl1;
 	int err;
 
 	mutex_lock(&chip->reg_lock);
@@ -268,28 +267,13 @@ static irqreturn_t mv88e6xxx_g1_irq_thread_fn(int irq, void *dev_id)
 	if (err)
 		goto out;
 
-	do {
-		for (n = 0; n < chip->g1_irq.nirqs; ++n) {
-			if (reg & (1 << n)) {
-				sub_irq = irq_find_mapping(chip->g1_irq.domain,
-							   n);
-				handle_nested_irq(sub_irq);
-				++nhandled;
-			}
+	for (n = 0; n < chip->g1_irq.nirqs; ++n) {
+		if (reg & (1 << n)) {
+			sub_irq = irq_find_mapping(chip->g1_irq.domain, n);
+			handle_nested_irq(sub_irq);
+			++nhandled;
 		}
-
-		mutex_lock(&chip->reg_lock);
-		err = mv88e6xxx_g1_read(chip, MV88E6XXX_G1_CTL1, &ctl1);
-		if (err)
-			goto unlock;
-		err = mv88e6xxx_g1_read(chip, MV88E6XXX_G1_STS, &reg);
-unlock:
-		mutex_unlock(&chip->reg_lock);
-		if (err)
-			goto out;
-		ctl1 &= GENMASK(chip->g1_irq.nirqs, 0);
-	} while (reg & ctl1);
-
+	}
 out:
 	return (nhandled > 0 ? IRQ_HANDLED : IRQ_NONE);
 }

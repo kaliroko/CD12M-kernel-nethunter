@@ -991,14 +991,8 @@ out:
 static ssize_t uevent_store(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t count)
 {
-	int rc;
-
-	rc = kobject_synth_uevent(&dev->kobj, buf, count);
-
-	if (rc) {
+	if (kobject_synth_uevent(&dev->kobj, buf, count))
 		dev_err(dev, "uevent: failed to send synthetic uevent\n");
-		return rc;
-	}
 
 	return count;
 }

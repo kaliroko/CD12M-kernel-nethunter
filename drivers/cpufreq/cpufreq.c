@@ -26,6 +26,7 @@
 #include <linux/kernel_stat.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/pm_qos.h>
 #include <linux/slab.h>
 #include <linux/suspend.h>
 #include <linux/syscore_ops.h>
@@ -126,6 +127,15 @@ struct kobject *get_governor_parent_kobj(struct cpufreq_policy *policy)
 		return cpufreq_global_kobject;
 }
 EXPORT_SYMBOL_GPL(get_governor_parent_kobj);
+
+struct cpufreq_frequency_table *cpufreq_frequency_get_table(unsigned int cpu)
+{
+	struct cpufreq_policy *policy = per_cpu(cpufreq_cpu_data, cpu);
+
+	return policy && !policy_is_inactive(policy) ?
+		policy->freq_table : NULL;
+}
+EXPORT_SYMBOL_GPL(cpufreq_frequency_get_table);
 
 static inline u64 get_cpu_idle_time_jiffy(unsigned int cpu, u64 *wall)
 {
@@ -1081,6 +1091,64 @@ static void handle_update(struct work_struct *work)
 	cpufreq_update_policy(cpu);
 }
 
+static int pm_qos_clusterx_freq_handler(struct notifier_block *nb,
+		unsigned long val, void *v)
+{
+	struct cpufreq_policy *policy = container_of(nb, struct cpufreq_policy, pm_qos_freq_nb);
+	int ret = -1;
+
+	if (down_write_trylock(&policy->rwsem)) {
+		if (!policy_is_inactive(policy))
+			ret = __cpufreq_driver_target(policy, policy->target_freq, CPUFREQ_RELATION_L);
+		up_write(&policy->rwsem);
+	}
+
+	return ret;
+}
+
+static void pm_qos_clusterx_freq_init(struct cpufreq_policy *policy)
+{
+	int cluster_id = topology_physical_package_id(policy->cpu);
+
+	switch (cluster_id) {
+	case CPU_CLUSTER0:
+		policy->pm_qos_freq_nb = (struct notifier_block){
+			.notifier_call = pm_qos_clusterx_freq_handler,
+		};
+		pm_qos_add_notifier(PM_QOS_CLUSTER0_FREQ_MAX, &policy->pm_qos_freq_nb);
+		pm_qos_add_notifier(PM_QOS_CLUSTER0_FREQ_MIN, &policy->pm_qos_freq_nb);
+		break;
+	case CPU_CLUSTER1:
+		policy->pm_qos_freq_nb = (struct notifier_block){
+			.notifier_call = pm_qos_clusterx_freq_handler,
+		};
+		pm_qos_add_notifier(PM_QOS_CLUSTER1_FREQ_MAX, &policy->pm_qos_freq_nb);
+		pm_qos_add_notifier(PM_QOS_CLUSTER1_FREQ_MIN, &policy->pm_qos_freq_nb);
+		break;
+	default:
+		pr_warn("more cluster id is not support yet!\n");
+		break;
+	}
+}
+
+static void pm_qos_clusterx_freq_exit(struct cpufreq_policy *policy)
+{
+	int cluster_id = topology_physical_package_id(policy->cpu);
+
+	switch (cluster_id) {
+	case CPU_CLUSTER0:
+		pm_qos_remove_notifier(PM_QOS_CLUSTER0_FREQ_MAX, &policy->pm_qos_freq_nb);
+		pm_qos_remove_notifier(PM_QOS_CLUSTER0_FREQ_MIN, &policy->pm_qos_freq_nb);
+		break;
+	case CPU_CLUSTER1:
+		pm_qos_remove_notifier(PM_QOS_CLUSTER1_FREQ_MAX, &policy->pm_qos_freq_nb);
+		pm_qos_remove_notifier(PM_QOS_CLUSTER1_FREQ_MIN, &policy->pm_qos_freq_nb);
+		break;
+	default:
+		pr_warn("more cluster id is not support yet!\n");
+		break;
+	};
+}
 static struct cpufreq_policy *cpufreq_policy_alloc(unsigned int cpu)
 {
 	struct cpufreq_policy *policy;
@@ -1114,6 +1182,7 @@ static struct cpufreq_policy *cpufreq_policy_alloc(unsigned int cpu)
 	INIT_WORK(&policy->update, handle_update);
 
 	policy->cpu = cpu;
+
 	return policy;
 
 err_free_real_cpus:
@@ -1210,6 +1279,7 @@ static int cpufreq_online(unsigned int cpu)
 		pr_debug("initialization failed\n");
 		goto out_free_policy;
 	}
+	pm_qos_clusterx_freq_init(policy);
 
 	down_write(&policy->rwsem);
 
@@ -1385,6 +1455,7 @@ static int cpufreq_offline(unsigned int cpu)
 				CPUFREQ_NAME_LEN);
 		else
 			policy->last_policy = policy->policy;
+		pm_qos_clusterx_freq_exit(policy);
 	} else if (cpu == policy->cpu) {
 		/* Nominate new CPU */
 		policy->cpu = cpumask_any(policy->cpus);
@@ -1522,20 +1593,36 @@ unsigned int cpufreq_quick_get_max(unsigned int cpu)
 }
 EXPORT_SYMBOL(cpufreq_quick_get_max);
 
+unsigned int cpufreq_quick_get_target(unsigned int cpu)
+{
+	struct cpufreq_policy *policy;
+	unsigned int ret_freq = 0;
+
+	policy = cpufreq_cpu_get(cpu);
+	if (policy) {
+		ret_freq = policy->target_freq;
+		cpufreq_cpu_put(policy);
+	}
+
+	return ret_freq;
+}
+EXPORT_SYMBOL(cpufreq_quick_get_target);
+
 static unsigned int __cpufreq_get(struct cpufreq_policy *policy)
 {
 	unsigned int ret_freq = 0;
 
-	if (unlikely(policy_is_inactive(policy)) || !cpufreq_driver->get)
+	if (!cpufreq_driver->get)
 		return ret_freq;
 
 	ret_freq = cpufreq_driver->get(policy->cpu);
 
 	/*
-	 * If fast frequency switching is used with the given policy, the check
+	 * Updating inactive policies is invalid, so avoid doing that.  Also
+	 * if fast frequency switching is used with the given policy, the check
 	 * against policy->cur is pointless, so skip it in that case too.
 	 */
-	if (policy->fast_switch_enabled)
+	if (unlikely(policy_is_inactive(policy)) || policy->fast_switch_enabled)
 		return ret_freq;
 
 	if (ret_freq && policy->cur &&
@@ -1564,7 +1651,10 @@ unsigned int cpufreq_get(unsigned int cpu)
 
 	if (policy) {
 		down_read(&policy->rwsem);
-		ret_freq = __cpufreq_get(policy);
+
+		if (!policy_is_inactive(policy))
+			ret_freq = __cpufreq_get(policy);
+
 		up_read(&policy->rwsem);
 
 		cpufreq_cpu_put(policy);
@@ -1947,9 +2037,26 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 {
 	unsigned int old_target_freq = target_freq;
 	int index;
+	unsigned int qos_max_freq = PM_QOS_FREQ_MAX_DEFAULT_VALUE;
+	unsigned int qos_min_freq = PM_QOS_FREQ_MIN_DEFAULT_VALUE;
+	unsigned int cluster_id;
+
+	policy->target_freq = target_freq;
 
 	if (cpufreq_disabled())
 		return -ENODEV;
+
+	/* Make sure that target freq is within qos request range */
+	cluster_id = topology_physical_package_id(policy->cpu);
+	if (CPU_CLUSTER0 == cluster_id) {
+		qos_max_freq = pm_qos_request(PM_QOS_CLUSTER0_FREQ_MAX);
+		qos_min_freq = pm_qos_request(PM_QOS_CLUSTER0_FREQ_MIN);
+	} else if (CPU_CLUSTER1 == cluster_id) {
+		qos_max_freq = pm_qos_request(PM_QOS_CLUSTER1_FREQ_MAX);
+		qos_min_freq = pm_qos_request(PM_QOS_CLUSTER1_FREQ_MIN);
+	} else
+		pr_warn("more cluster id is not support yet!\n");
+	target_freq = clamp_val(target_freq, qos_min_freq, qos_max_freq);
 
 	/* Make sure that target_freq is within supported range */
 	target_freq = clamp_val(target_freq, policy->min, policy->max);
@@ -1989,7 +2096,8 @@ int cpufreq_driver_target(struct cpufreq_policy *policy,
 
 	down_write(&policy->rwsem);
 
-	ret = __cpufreq_driver_target(policy, target_freq, relation);
+	if (!policy_is_inactive(policy))
+		ret = __cpufreq_driver_target(policy, target_freq, relation);
 
 	up_write(&policy->rwsem);
 

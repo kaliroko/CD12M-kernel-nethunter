@@ -343,7 +343,7 @@ static const unsigned int buzz_keymap[] = {
 static const unsigned int navigation_absmap[] = {
 	[0x30] = ABS_X,
 	[0x31] = ABS_Y,
-	[0x33] = ABS_Z, /* L2 */
+	[0x33] = ABS_BRAKE, /* L2 */
 };
 
 /* Buttons not physically available on the device, but still available
@@ -372,8 +372,8 @@ static const unsigned int navigation_keymap[] = {
 static const unsigned int sixaxis_absmap[] = {
 	[0x30] = ABS_X,
 	[0x31] = ABS_Y,
-	[0x32] = ABS_RX, /* right stick X */
-	[0x35] = ABS_RY, /* right stick Y */
+	[0x32] = ABS_Z, /* right stick X */
+	[0x35] = ABS_RZ, /* right stick Y */
 };
 
 static const unsigned int sixaxis_keymap[] = {
@@ -399,10 +399,10 @@ static const unsigned int sixaxis_keymap[] = {
 static const unsigned int ds4_absmap[] = {
 	[0x30] = ABS_X,
 	[0x31] = ABS_Y,
-	[0x32] = ABS_RX, /* right stick X */
-	[0x33] = ABS_Z, /* L2 */
-	[0x34] = ABS_RZ, /* R2 */
-	[0x35] = ABS_RY, /* right stick Y */
+	[0x32] = ABS_Z, /* right stick X */
+	[0x33] = ABS_BRAKE, /* L2 */
+	[0x34] = ABS_GAS, /* R2 */
+	[0x35] = ABS_RZ, /* right stick Y */
 };
 
 static const unsigned int ds4_keymap[] = {
@@ -880,7 +880,7 @@ static void sixaxis_parse_report(struct sony_sc *sc, u8 *rd, int size)
 		input_report_abs(sc->sensor_dev, ABS_Y, val);
 
 		val = 511 - ((rd[offset+3] << 8) | rd[offset+2]);
-		input_report_abs(sc->sensor_dev, ABS_Z, val);
+		input_report_abs(sc->sensor_dev, ABS_BRAKE, val);
 
 		input_sync(sc->sensor_dev);
 	}
@@ -923,8 +923,8 @@ static void dualshock4_parse_report(struct sony_sc *sc, u8 *rd, int size)
 		offset = data_offset + DS4_INPUT_REPORT_AXIS_OFFSET;
 		input_report_abs(input_dev, ABS_X, rd[offset]);
 		input_report_abs(input_dev, ABS_Y, rd[offset+1]);
-		input_report_abs(input_dev, ABS_RX, rd[offset+2]);
-		input_report_abs(input_dev, ABS_RY, rd[offset+3]);
+		input_report_abs(input_dev, ABS_Z, rd[offset+2]);
+		input_report_abs(input_dev, ABS_RZ, rd[offset+3]);
 
 		value = rd[offset+4] & 0xf;
 		if (value > 7)
@@ -948,8 +948,8 @@ static void dualshock4_parse_report(struct sony_sc *sc, u8 *rd, int size)
 
 		input_report_key(input_dev, BTN_MODE, rd[offset+6] & 0x1);
 
-		input_report_abs(input_dev, ABS_Z, rd[offset+7]);
-		input_report_abs(input_dev, ABS_RZ, rd[offset+8]);
+		input_report_abs(input_dev, ABS_BRAKE, rd[offset+7]);
+		input_report_abs(input_dev, ABS_GAS, rd[offset+8]);
 
 		input_sync(input_dev);
 	}
@@ -1349,26 +1349,26 @@ static int sony_register_sensors(struct sony_sc *sc)
 		 */
 		input_set_abs_params(sc->sensor_dev, ABS_X, -512, 511, 4, 0);
 		input_set_abs_params(sc->sensor_dev, ABS_Y, -512, 511, 4, 0);
-		input_set_abs_params(sc->sensor_dev, ABS_Z, -512, 511, 4, 0);
+		input_set_abs_params(sc->sensor_dev, ABS_BRAKE, -512, 511, 4, 0);
 		input_abs_set_res(sc->sensor_dev, ABS_X, SIXAXIS_ACC_RES_PER_G);
 		input_abs_set_res(sc->sensor_dev, ABS_Y, SIXAXIS_ACC_RES_PER_G);
-		input_abs_set_res(sc->sensor_dev, ABS_Z, SIXAXIS_ACC_RES_PER_G);
+		input_abs_set_res(sc->sensor_dev, ABS_BRAKE, SIXAXIS_ACC_RES_PER_G);
 	} else if (sc->quirks & DUALSHOCK4_CONTROLLER) {
 		range = DS4_ACC_RES_PER_G*4;
 		input_set_abs_params(sc->sensor_dev, ABS_X, -range, range, 16, 0);
 		input_set_abs_params(sc->sensor_dev, ABS_Y, -range, range, 16, 0);
-		input_set_abs_params(sc->sensor_dev, ABS_Z, -range, range, 16, 0);
+		input_set_abs_params(sc->sensor_dev, ABS_BRAKE, -range, range, 16, 0);
 		input_abs_set_res(sc->sensor_dev, ABS_X, DS4_ACC_RES_PER_G);
 		input_abs_set_res(sc->sensor_dev, ABS_Y, DS4_ACC_RES_PER_G);
-		input_abs_set_res(sc->sensor_dev, ABS_Z, DS4_ACC_RES_PER_G);
+		input_abs_set_res(sc->sensor_dev, ABS_BRAKE, DS4_ACC_RES_PER_G);
 
 		range = DS4_GYRO_RES_PER_DEG_S*2048;
-		input_set_abs_params(sc->sensor_dev, ABS_RX, -range, range, 16, 0);
-		input_set_abs_params(sc->sensor_dev, ABS_RY, -range, range, 16, 0);
+		input_set_abs_params(sc->sensor_dev, ABS_Z, -range, range, 16, 0);
 		input_set_abs_params(sc->sensor_dev, ABS_RZ, -range, range, 16, 0);
-		input_abs_set_res(sc->sensor_dev, ABS_RX, DS4_GYRO_RES_PER_DEG_S);
-		input_abs_set_res(sc->sensor_dev, ABS_RY, DS4_GYRO_RES_PER_DEG_S);
+		input_set_abs_params(sc->sensor_dev, ABS_GAS, -range, range, 16, 0);
+		input_abs_set_res(sc->sensor_dev, ABS_Z, DS4_GYRO_RES_PER_DEG_S);
 		input_abs_set_res(sc->sensor_dev, ABS_RZ, DS4_GYRO_RES_PER_DEG_S);
+		input_abs_set_res(sc->sensor_dev, ABS_GAS, DS4_GYRO_RES_PER_DEG_S);
 
 		__set_bit(EV_MSC, sc->sensor_dev->evbit);
 		__set_bit(MSC_TIMESTAMP, sc->sensor_dev->mscbit);
@@ -1572,17 +1572,17 @@ static int dualshock4_get_calibration_data(struct sony_sc *sc)
 	 * Data values will be normalized to 1/DS4_GYRO_RES_PER_DEG_S degree/s.
 	 */
 	speed_2x = (gyro_speed_plus + gyro_speed_minus);
-	sc->ds4_calib_data[0].abs_code = ABS_RX;
+	sc->ds4_calib_data[0].abs_code = ABS_Z;
 	sc->ds4_calib_data[0].bias = gyro_pitch_bias;
 	sc->ds4_calib_data[0].sens_numer = speed_2x*DS4_GYRO_RES_PER_DEG_S;
 	sc->ds4_calib_data[0].sens_denom = gyro_pitch_plus - gyro_pitch_minus;
 
-	sc->ds4_calib_data[1].abs_code = ABS_RY;
+	sc->ds4_calib_data[1].abs_code = ABS_RZ;
 	sc->ds4_calib_data[1].bias = gyro_yaw_bias;
 	sc->ds4_calib_data[1].sens_numer = speed_2x*DS4_GYRO_RES_PER_DEG_S;
 	sc->ds4_calib_data[1].sens_denom = gyro_yaw_plus - gyro_yaw_minus;
 
-	sc->ds4_calib_data[2].abs_code = ABS_RZ;
+	sc->ds4_calib_data[2].abs_code = ABS_GAS;
 	sc->ds4_calib_data[2].bias = gyro_roll_bias;
 	sc->ds4_calib_data[2].sens_numer = speed_2x*DS4_GYRO_RES_PER_DEG_S;
 	sc->ds4_calib_data[2].sens_denom = gyro_roll_plus - gyro_roll_minus;
@@ -1603,7 +1603,7 @@ static int dualshock4_get_calibration_data(struct sony_sc *sc)
 	sc->ds4_calib_data[4].sens_denom = range_2g;
 
 	range_2g = acc_z_plus - acc_z_minus;
-	sc->ds4_calib_data[5].abs_code = ABS_Z;
+	sc->ds4_calib_data[5].abs_code = ABS_BRAKE;
 	sc->ds4_calib_data[5].bias = acc_z_plus - range_2g / 2;
 	sc->ds4_calib_data[5].sens_numer = 2*DS4_ACC_RES_PER_G;
 	sc->ds4_calib_data[5].sens_denom = range_2g;
@@ -2607,7 +2607,8 @@ static int sony_input_configured(struct hid_device *hdev,
 
 		sony_init_output_report(sc, sixaxis_send_output_report);
 	} else if (sc->quirks & DUALSHOCK4_CONTROLLER) {
-		ret = dualshock4_get_calibration_data(sc);
+		dualshock4_get_calibration_data(sc);
+		dualshock4_get_calibration_data(sc);
 		if (ret < 0) {
 			hid_err(hdev, "Failed to get calibration data from Dualshock 4\n");
 			goto err_stop;

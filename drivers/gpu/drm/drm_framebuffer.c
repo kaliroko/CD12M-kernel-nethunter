@@ -835,8 +835,8 @@ retry:
 			goto unlock;
 	}
 
-	if (plane_mask)
-		ret = drm_atomic_commit(state);
+
+	/* WORKAROUND: sprd atomic_remove_fb doesn't need drm_atomic_commit. */
 
 unlock:
 	if (plane_mask)

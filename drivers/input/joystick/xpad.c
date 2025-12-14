@@ -344,6 +344,7 @@ static const struct xpad_device {
 static const signed short xpad_common_btn[] = {
 	BTN_A, BTN_B, BTN_X, BTN_Y,			/* "analog" buttons */
 	BTN_START, BTN_SELECT, BTN_THUMBL, BTN_THUMBR,	/* start/back/sticks */
+	BTN_MODE,		/* The big X button */
 	-1						/* terminating entry */
 };
 
@@ -368,13 +369,12 @@ static const signed short xpad_btn_triggers[] = {
 
 static const signed short xpad360_btn[] = {  /* buttons for x360 controller */
 	BTN_TL, BTN_TR,		/* Button LB/RB */
-	BTN_MODE,		/* The big X button */
 	-1
 };
 
 static const signed short xpad_abs[] = {
 	ABS_X, ABS_Y,		/* left stick */
-	ABS_RX, ABS_RY,		/* right stick */
+	ABS_Z, ABS_RZ,		/* right stick */
 	-1			/* terminating entry */
 };
 
@@ -386,7 +386,7 @@ static const signed short xpad_abs_pad[] = {
 
 /* used when triggers are mapped to axes */
 static const signed short xpad_abs_triggers[] = {
-	ABS_Z, ABS_RZ,		/* triggers left/right */
+	ABS_BRAKE, ABS_GAS,		/* triggers left/right */
 	-1
 };
 
@@ -619,19 +619,19 @@ static void xpad_process_packet(struct usb_xpad *xpad, u16 cmd, unsigned char *d
 				 ~(__s16) le16_to_cpup((__le16 *)(data + 14)));
 
 		/* right stick */
-		input_report_abs(dev, ABS_RX,
+		input_report_abs(dev, ABS_Z,
 				 (__s16) le16_to_cpup((__le16 *)(data + 16)));
-		input_report_abs(dev, ABS_RY,
+		input_report_abs(dev, ABS_RZ,
 				 ~(__s16) le16_to_cpup((__le16 *)(data + 18)));
 	}
 
 	/* triggers left/right */
-	if (xpad->mapping & MAP_TRIGGERS_TO_BUTTONS) {
+	if (1) {
 		input_report_key(dev, BTN_TL2, data[10]);
 		input_report_key(dev, BTN_TR2, data[11]);
-	} else {
-		input_report_abs(dev, ABS_Z, data[10]);
-		input_report_abs(dev, ABS_RZ, data[11]);
+	
+		input_report_abs(dev, ABS_BRAKE, data[10]);
+		input_report_abs(dev, ABS_GAS, data[11]);
 	}
 
 	/* digital pad */
@@ -732,19 +732,19 @@ static void xpad360_process_packet(struct usb_xpad *xpad, struct input_dev *dev,
 				 ~(__s16) le16_to_cpup((__le16 *)(data + 8)));
 
 		/* right stick */
-		input_report_abs(dev, ABS_RX,
+		input_report_abs(dev, ABS_Z,
 				 (__s16) le16_to_cpup((__le16 *)(data + 10)));
-		input_report_abs(dev, ABS_RY,
+		input_report_abs(dev, ABS_RZ,
 				 ~(__s16) le16_to_cpup((__le16 *)(data + 12)));
 	}
 
 	/* triggers left/right */
-	if (xpad->mapping & MAP_TRIGGERS_TO_BUTTONS) {
+	if (1) {
 		input_report_key(dev, BTN_TL2, data[4]);
 		input_report_key(dev, BTN_TR2, data[5]);
-	} else {
-		input_report_abs(dev, ABS_Z, data[4]);
-		input_report_abs(dev, ABS_RZ, data[5]);
+		
+		input_report_abs(dev, ABS_BRAKE, data[4]);
+		input_report_abs(dev, ABS_GAS, data[5]);
 	}
 
 	input_sync(dev);
@@ -886,22 +886,22 @@ static void xpadone_process_packet(struct usb_xpad *xpad, u16 cmd, unsigned char
 				 ~(__s16) le16_to_cpup((__le16 *)(data + 12)));
 
 		/* right stick */
-		input_report_abs(dev, ABS_RX,
+		input_report_abs(dev, ABS_Z,
 				 (__s16) le16_to_cpup((__le16 *)(data + 14)));
-		input_report_abs(dev, ABS_RY,
+		input_report_abs(dev, ABS_RZ,
 				 ~(__s16) le16_to_cpup((__le16 *)(data + 16)));
 	}
 
 	/* triggers left/right */
-	if (xpad->mapping & MAP_TRIGGERS_TO_BUTTONS) {
+	if (1) {
 		input_report_key(dev, BTN_TL2,
 				 (__u16) le16_to_cpup((__le16 *)(data + 6)));
 		input_report_key(dev, BTN_TR2,
 				 (__u16) le16_to_cpup((__le16 *)(data + 8)));
-	} else {
-		input_report_abs(dev, ABS_Z,
+				 
+		input_report_abs(dev, ABS_BRAKE,
 				 (__u16) le16_to_cpup((__le16 *)(data + 6)));
-		input_report_abs(dev, ABS_RZ,
+		input_report_abs(dev, ABS_GAS,
 				 (__u16) le16_to_cpup((__le16 *)(data + 8)));
 	}
 
@@ -1586,12 +1586,12 @@ static void xpad_set_up_abs(struct input_dev *input_dev, signed short abs)
 	switch (abs) {
 	case ABS_X:
 	case ABS_Y:
-	case ABS_RX:
-	case ABS_RY:	/* the two sticks */
+	case ABS_Z:
+	case ABS_RZ:	/* the two sticks */
 		input_set_abs_params(input_dev, abs, -32768, 32767, 16, 128);
 		break;
-	case ABS_Z:
-	case ABS_RZ:	/* the triggers (if mapped to axes) */
+	case ABS_BRAKE:
+	case ABS_GAS:	/* the triggers (if mapped to axes) */
 		if (xpad->xtype == XTYPE_XBOXONE)
 			input_set_abs_params(input_dev, abs, 0, 1023, 0, 0);
 		else
@@ -1682,11 +1682,11 @@ static int xpad_init_input(struct usb_xpad *xpad)
 			xpad_set_up_abs(input_dev, xpad_abs_pad[i]);
 	}
 
-	if (xpad->mapping & MAP_TRIGGERS_TO_BUTTONS) {
+	if (1) {
 		for (i = 0; xpad_btn_triggers[i] >= 0; i++)
 			input_set_capability(input_dev, EV_KEY,
 					     xpad_btn_triggers[i]);
-	} else {
+						 
 		for (i = 0; xpad_abs_triggers[i] >= 0; i++)
 			xpad_set_up_abs(input_dev, xpad_abs_triggers[i]);
 	}

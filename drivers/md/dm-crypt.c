@@ -935,7 +935,7 @@ static int dm_crypt_integrity_io_alloc(struct dm_crypt_io *io, struct bio *bio)
 	if (IS_ERR(bip))
 		return PTR_ERR(bip);
 
-	tag_len = io->cc->on_disk_tag_size * (bio_sectors(bio) >> io->cc->sector_shift);
+	tag_len = io->cc->on_disk_tag_size * bio_sectors(bio);
 
 	bip->bip_iter.bi_size = tag_len;
 	bip->bip_iter.bi_sector = io->cc->start + io->sector;
@@ -1893,6 +1893,13 @@ static int crypt_alloc_tfms_skcipher(struct crypt_config *cc, char *ciphermode)
 		}
 	}
 
+	/*
+	 * dm-crypt performance can vary greatly depending on which crypto
+	 * algorithm implementation is used.  Help people debug performance
+	 * problems by logging the ->cra_driver_name.
+	 */
+	DMINFO("%s using implementation \"%s\"", ciphermode,
+	       crypto_skcipher_alg(any_tfm(cc))->base.cra_driver_name);
 	return 0;
 }
 
@@ -1911,6 +1918,8 @@ static int crypt_alloc_tfms_aead(struct crypt_config *cc, char *ciphermode)
 		return err;
 	}
 
+	DMINFO("%s using implementation \"%s\"", ciphermode,
+	       crypto_aead_alg(any_tfm_aead(cc))->base.cra_driver_name);
 	return 0;
 }
 

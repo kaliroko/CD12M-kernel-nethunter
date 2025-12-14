@@ -25,10 +25,13 @@
 #include <linux/rbtree.h>
 #include <linux/sched.h>
 #include <linux/shrinker.h>
+#include <linux/sprd_iommu.h>
 #include <linux/types.h>
 #include <linux/miscdevice.h>
 
 #include "../uapi/ion.h"
+
+#define ion_phys_addr_t unsigned long
 
 /**
  * struct ion_platform_heap - defines a heap in the given platform
@@ -85,6 +88,9 @@ struct ion_buffer {
 	void *vaddr;
 	struct sg_table *sg_table;
 	struct list_head attachments;
+	int iomap_cnt[SPRD_IOMMU_MAX];
+	pid_t pid;
+	struct timeval alloc_time;
 };
 void ion_buffer_destroy(struct ion_buffer *buffer);
 
@@ -229,6 +235,8 @@ int ion_alloc(size_t len,
 	      unsigned int heap_id_mask,
 	      unsigned int flags);
 
+int ion_phys(int fd, unsigned long *phys_addr, size_t *size);
+
 /**
  * ion_heap_init_shrinker
  * @heap:		the heap
@@ -357,5 +365,13 @@ int ion_page_pool_shrink(struct ion_page_pool *pool, gfp_t gfp_mask,
 long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 
 int ion_query_heaps(struct ion_heap_query *query);
+struct dma_buf *ion_new_alloc(size_t len, unsigned int heap_id_mask,
+			      unsigned int flags);
+void ion_free(struct dma_buf *dmabuf);
 
+struct ion_heap *ion_carveout_heap_create(struct ion_platform_heap *heap_data);
+#ifdef CONFIG_E_SHOW_MEM
+int ion_debug_heap_show_printk(struct ion_heap *heap,
+			       enum e_show_mem_type type, void *data);
+#endif
 #endif /* _ION_H */

@@ -378,7 +378,6 @@ static int disable_net;
 /* driver info */
 static const char driver_name[] = "hso";
 static const char tty_filename[] = "ttyHS";
-static const char *version = __FILE__ ": " MOD_AUTHOR;
 /* the usb driver itself (registered in hso_init) */
 static struct usb_driver hso_driver;
 /* serial structures */
@@ -3234,7 +3233,7 @@ static int __init hso_init(void)
 	int result;
 
 	/* put it in the log */
-	pr_info("%s\n", version);
+	pr_info("%s()Line:%d %s\n", __func__, __LINE__, MOD_AUTHOR);
 
 	/* Initialise the serial table semaphore and table */
 	spin_lock_init(&serial_table_lock);

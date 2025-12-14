@@ -513,6 +513,32 @@ static void musb_otg_timer_func(unsigned long data)
 	spin_unlock_irqrestore(&musb->lock, flags);
 }
 
+void musb_force_single_fifo(struct musb *musb, u8 epnum, u8 is_tx)
+{
+	void __iomem *musb_base = musb->mregs;
+	struct musb_hw_ep	*hw_ep = musb->endpoints + epnum;
+	u8 index_bk = 0;
+
+	if (musb->dyn_fifo == 0)
+		return;
+
+	index_bk = musb_readb(musb_base, MUSB_INDEX);
+	musb_writeb(musb_base, MUSB_INDEX, epnum);
+	if (is_tx) {
+		musb_write_txfifosz(musb_base,
+			musb->context.index_regs[epnum].s_txfifosz
+				& (~MUSB_FIFOSZ_DPB));
+		hw_ep->tx_double_buffered = 0;
+	} else {
+		musb_write_rxfifosz(musb_base,
+			musb->context.index_regs[epnum].s_rxfifosz
+				& (~MUSB_FIFOSZ_DPB));
+		hw_ep->rx_double_buffered = 0;
+	}
+
+	musb_writeb(musb_base, MUSB_INDEX, index_bk);
+}
+
 /*
  * Stops the HNP transition. Caller must take care of locking.
  */
@@ -906,7 +932,7 @@ b_host:
 	 */
 	if (int_usb & MUSB_INTR_RESET) {
 		handled = IRQ_HANDLED;
-		if (is_host_active(musb)) {
+		if ((devctl & MUSB_DEVCTL_HM) || is_host_active(musb)) {
 			/*
 			 * When BABBLE happens what we can depends on which
 			 * platform MUSB is running, because some platforms
@@ -916,7 +942,8 @@ b_host:
 			 * drop the session.
 			 */
 			dev_err(musb->controller, "Babble\n");
-			musb_recover_from_babble(musb);
+			if (is_host_active(musb))
+				musb_recover_from_babble(musb);
 		} else {
 			musb_dbg(musb, "BUS RESET as %s",
 				usb_otg_state_string(musb->xceiv->otg->state));
@@ -1049,7 +1076,6 @@ void musb_start(struct musb *musb)
 
 	musb_dbg(musb, "<== devctl %02x", devctl);
 
-	musb_enable_interrupts(musb);
 	musb_writeb(regs, MUSB_TESTMODE, 0);
 
 	power = MUSB_POWER_ISOUPDATE;
@@ -1081,6 +1107,7 @@ void musb_start(struct musb *musb)
 
 	musb_platform_enable(musb);
 	musb_writeb(regs, MUSB_DEVCTL, devctl);
+	musb_enable_interrupts(musb);
 }
 
 /*
@@ -1275,23 +1302,31 @@ fifo_setup(struct musb *musb, struct musb_hw_ep  *hw_ep,
 	case FIFO_TX:
 		musb_write_txfifosz(mbase, c_size);
 		musb_write_txfifoadd(mbase, c_off);
+		musb->context.index_regs[hw_ep->epnum].s_txfifosz = c_size;
+		musb->context.index_regs[hw_ep->epnum].s_txfifoadd = c_off;
 		hw_ep->tx_double_buffered = !!(c_size & MUSB_FIFOSZ_DPB);
 		hw_ep->max_packet_sz_tx = maxpacket;
 		break;
 	case FIFO_RX:
 		musb_write_rxfifosz(mbase, c_size);
 		musb_write_rxfifoadd(mbase, c_off);
+		musb->context.index_regs[hw_ep->epnum].s_rxfifosz = c_size;
+		musb->context.index_regs[hw_ep->epnum].s_rxfifoadd = c_off;
 		hw_ep->rx_double_buffered = !!(c_size & MUSB_FIFOSZ_DPB);
 		hw_ep->max_packet_sz_rx = maxpacket;
 		break;
 	case FIFO_RXTX:
 		musb_write_txfifosz(mbase, c_size);
 		musb_write_txfifoadd(mbase, c_off);
+		musb->context.index_regs[hw_ep->epnum].s_txfifosz = c_size;
+		musb->context.index_regs[hw_ep->epnum].s_txfifoadd = c_off;
 		hw_ep->rx_double_buffered = !!(c_size & MUSB_FIFOSZ_DPB);
 		hw_ep->max_packet_sz_rx = maxpacket;
 
 		musb_write_rxfifosz(mbase, c_size);
 		musb_write_rxfifoadd(mbase, c_off);
+		musb->context.index_regs[hw_ep->epnum].s_rxfifosz = c_size;
+		musb->context.index_regs[hw_ep->epnum].s_rxfifoadd = c_off;
 		hw_ep->tx_double_buffered = hw_ep->rx_double_buffered;
 		hw_ep->max_packet_sz_tx = maxpacket;
 
@@ -1321,6 +1356,8 @@ static int ep_config_from_table(struct musb *musb)
 	if (musb->config->fifo_cfg) {
 		cfg = musb->config->fifo_cfg;
 		n = musb->config->fifo_cfg_size;
+		if (is_host_active(musb))
+			cfg = musb->config->host_fifo_cfg;
 		goto done;
 	}
 
@@ -1396,6 +1433,11 @@ done:
 	return 0;
 }
 
+void musb_reset_all_fifo_2_default(struct musb *musb)
+{
+	pr_debug("set %s FIFO setting\n", is_host_active(musb) ? "Host" : "Device");
+	ep_config_from_table(musb);
+}
 
 /*
  * ep_config_from_hw - when MUSB_C_DYNFIFO_DEF is false
@@ -1835,83 +1877,6 @@ static const struct attribute_group musb_attr_group = {
 	.attrs = musb_attributes,
 };
 
-#define MUSB_QUIRK_B_INVALID_VBUS_91	(MUSB_DEVCTL_BDEVICE | \
-					 (2 << MUSB_DEVCTL_VBUS_SHIFT) | \
-					 MUSB_DEVCTL_SESSION)
-#define MUSB_QUIRK_A_DISCONNECT_19	((3 << MUSB_DEVCTL_VBUS_SHIFT) | \
-					 MUSB_DEVCTL_SESSION)
-
-/*
- * Check the musb devctl session bit to determine if we want to
- * allow PM runtime for the device. In general, we want to keep things
- * active when the session bit is set except after host disconnect.
- *
- * Only called from musb_irq_work. If this ever needs to get called
- * elsewhere, proper locking must be implemented for musb->session.
- */
-static void musb_pm_runtime_check_session(struct musb *musb)
-{
-	u8 devctl, s;
-	int error;
-
-	devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
-
-	/* Handle session status quirks first */
-	s = MUSB_DEVCTL_FSDEV | MUSB_DEVCTL_LSDEV |
-		MUSB_DEVCTL_HR;
-	switch (devctl & ~s) {
-	case MUSB_QUIRK_B_INVALID_VBUS_91:
-		if (musb->quirk_retries && !musb->flush_irq_work) {
-			musb_dbg(musb,
-				 "Poll devctl on invalid vbus, assume no session");
-			schedule_delayed_work(&musb->irq_work,
-					      msecs_to_jiffies(1000));
-			musb->quirk_retries--;
-			return;
-		}
-		/* fall through */
-	case MUSB_QUIRK_A_DISCONNECT_19:
-		if (musb->quirk_retries && !musb->flush_irq_work) {
-			musb_dbg(musb,
-				 "Poll devctl on possible host mode disconnect");
-			schedule_delayed_work(&musb->irq_work,
-					      msecs_to_jiffies(1000));
-			musb->quirk_retries--;
-			return;
-		}
-		if (!musb->session)
-			break;
-		musb_dbg(musb, "Allow PM on possible host mode disconnect");
-		pm_runtime_mark_last_busy(musb->controller);
-		pm_runtime_put_autosuspend(musb->controller);
-		musb->session = false;
-		return;
-	default:
-		break;
-	}
-
-	/* No need to do anything if session has not changed */
-	s = devctl & MUSB_DEVCTL_SESSION;
-	if (s == musb->session)
-		return;
-
-	/* Block PM or allow PM? */
-	if (s) {
-		musb_dbg(musb, "Block PM on active session: %02x", devctl);
-		error = pm_runtime_get_sync(musb->controller);
-		if (error < 0)
-			dev_err(musb->controller, "Could not enable: %i\n",
-				error);
-		musb->quirk_retries = 3;
-	} else {
-		musb_dbg(musb, "Allow PM with no session: %02x", devctl);
-		pm_runtime_mark_last_busy(musb->controller);
-		pm_runtime_put_autosuspend(musb->controller);
-	}
-
-	musb->session = s;
-}
-
 /* Only used to provide driver mode change events */
 static void musb_irq_work(struct work_struct *data)
 {
@@ -1924,8 +1889,6 @@ static void musb_irq_work(struct work_struct *data)
 
 		return;
 	}
-
-	musb_pm_runtime_check_session(musb);
 
 	if (musb->xceiv->otg->state != musb->xceiv_old_state) {
 		musb->xceiv_old_state = musb->xceiv->otg->state;
@@ -1982,7 +1945,7 @@ static void musb_recover_from_babble(struct musb *musb)
  */
 
 static struct musb *allocate_instance(struct device *dev,
-		const struct musb_hdrc_config *config, void __iomem *mbase)
+		struct musb_hdrc_config *config, void __iomem *mbase)
 {
 	struct musb		*musb;
 	struct musb_hw_ep	*ep;
@@ -2172,12 +2135,22 @@ musb_init_controller(struct device *dev, int nIrq, void __iomem *ctrl)
 		goto fail0;
 	}
 
+	/*
+	 * FIXME: we should set the dma operations firstly when calling
+	 * the dma function in arm64, otherwise dma_alloc_coherent will failed.
+	 */
+	if (get_dma_ops(musb->controller) == get_dma_ops(NULL))
+		musb->controller->dma_ops = get_dma_ops(dev->parent);
+
 	spin_lock_init(&musb->lock);
 	spin_lock_init(&musb->list_lock);
 	musb->board_set_power = plat->set_power;
 	musb->min_power = plat->min_power;
 	musb->ops = plat->platform_ops;
 	musb->port_mode = plat->mode;
+#ifdef CONFIG_USB_MUSB_SPRD
+	musb->power_always_on = *((bool *)plat->board_data);
+#endif
 
 	/*
 	 * Initialize the default IO functions. At least omap2430 needs
@@ -2542,23 +2515,10 @@ static void musb_save_context(struct musb *musb)
 		musb_writeb(musb_base, MUSB_INDEX, i);
 		musb->context.index_regs[i].txmaxp =
 			musb_readw(epio, MUSB_TXMAXP);
-		musb->context.index_regs[i].txcsr =
-			musb_readw(epio, MUSB_TXCSR);
+		musb->context.index_regs[i].txcsr = 0;
 		musb->context.index_regs[i].rxmaxp =
 			musb_readw(epio, MUSB_RXMAXP);
-		musb->context.index_regs[i].rxcsr =
-			musb_readw(epio, MUSB_RXCSR);
-
-		if (musb->dyn_fifo) {
-			musb->context.index_regs[i].txfifoadd =
-					musb_read_txfifoadd(musb_base);
-			musb->context.index_regs[i].rxfifoadd =
-					musb_read_rxfifoadd(musb_base);
-			musb->context.index_regs[i].txfifosz =
-					musb_read_txfifosz(musb_base);
-			musb->context.index_regs[i].rxfifosz =
-					musb_read_rxfifosz(musb_base);
-		}
+		musb->context.index_regs[i].rxcsr = 0;
 
 		musb->context.index_regs[i].txtype =
 			musb_readb(epio, MUSB_TXTYPE);
@@ -2583,6 +2543,7 @@ static void musb_save_context(struct musb *musb)
 		musb->context.index_regs[i].rxhubport =
 			musb_read_rxhubport(musb, i);
 	}
+	musb->restore_complete = false;
 }
 
 static void musb_restore_context(struct musb *musb)
@@ -2592,6 +2553,9 @@ static void musb_restore_context(struct musb *musb)
 	void __iomem *epio;
 	u8 power;
 
+	if (musb->restore_complete)
+		return;
+	musb->restore_complete = true;
 	musb_writew(musb_base, MUSB_FRAME, musb->context.frame);
 	musb_writeb(musb_base, MUSB_TESTMODE, musb->context.testmode);
 	musb_write_ulpi_buscontrol(musb->mregs, musb->context.busctl);
@@ -2630,17 +2594,6 @@ static void musb_restore_context(struct musb *musb)
 		musb_writew(epio, MUSB_RXCSR,
 			musb->context.index_regs[i].rxcsr);
 
-		if (musb->dyn_fifo) {
-			musb_write_txfifosz(musb_base,
-				musb->context.index_regs[i].txfifosz);
-			musb_write_rxfifosz(musb_base,
-				musb->context.index_regs[i].rxfifosz);
-			musb_write_txfifoadd(musb_base,
-				musb->context.index_regs[i].txfifoadd);
-			musb_write_rxfifoadd(musb_base,
-				musb->context.index_regs[i].rxfifoadd);
-		}
-
 		musb_writeb(epio, MUSB_TXTYPE,
 				musb->context.index_regs[i].txtype);
 		musb_writeb(epio, MUSB_TXINTERVAL,
@@ -2672,6 +2625,13 @@ static int musb_suspend(struct device *dev)
 	struct musb	*musb = dev_to_musb(dev);
 	unsigned long	flags;
 	int ret;
+
+#ifdef CONFIG_USB_MUSB_SPRD
+	if (musb->power_always_on && is_host_active(musb))
+		return 0;
+#endif
+	if (pm_runtime_suspended(dev))
+		return 0;
 
 	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
@@ -2727,6 +2687,12 @@ static int musb_resume(struct device *dev)
 	 * be done. As it shouldn't harm other platforms, we do it
 	 * unconditionally.
 	 */
+#ifdef CONFIG_USB_MUSB_SPRD
+	if (musb->power_always_on && is_host_active(musb))
+		return 0;
+#endif
+	if (pm_runtime_suspended(dev))
+		return 0;
 
 	musb_restore_context(musb);
 
@@ -2754,9 +2720,16 @@ static int musb_resume(struct device *dev)
 static int musb_runtime_suspend(struct device *dev)
 {
 	struct musb	*musb = dev_to_musb(dev);
+	u8 devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
 
 	musb_save_context(musb);
 	musb->is_runtime_suspended = 1;
+
+	if ((musb->xceiv->otg->state != OTG_STATE_B_IDLE) &&
+		musb->g.state == USB_STATE_NOTATTACHED) {
+		musb_writeb(musb->mregs, MUSB_DEVCTL,
+			devctl & ~MUSB_DEVCTL_SESSION);
+	}
 
 	return 0;
 }

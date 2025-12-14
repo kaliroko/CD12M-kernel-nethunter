@@ -487,17 +487,6 @@ static void phylink_run_resolve(struct phylink *pl)
 		queue_work(system_power_efficient_wq, &pl->resolve);
 }
 
-static void phylink_run_resolve_and_disable(struct phylink *pl, int bit)
-{
-	unsigned long state = pl->phylink_disable_state;
-
-	set_bit(bit, &pl->phylink_disable_state);
-	if (state == 0) {
-		queue_work(system_power_efficient_wq, &pl->resolve);
-		flush_work(&pl->resolve);
-	}
-}
-
 static const struct sfp_upstream_ops sfp_phylink_ops;
 
 static int phylink_register_sfp(struct phylink *pl, struct device_node *np)
@@ -787,7 +776,9 @@ void phylink_stop(struct phylink *pl)
 	if (pl->sfp_bus)
 		sfp_upstream_stop(pl->sfp_bus);
 
-	phylink_run_resolve_and_disable(pl, PHYLINK_DISABLE_STOPPED);
+	set_bit(PHYLINK_DISABLE_STOPPED, &pl->phylink_disable_state);
+	queue_work(system_power_efficient_wq, &pl->resolve);
+	flush_work(&pl->resolve);
 }
 EXPORT_SYMBOL_GPL(phylink_stop);
 
@@ -1442,7 +1433,9 @@ static void phylink_sfp_link_down(void *upstream)
 
 	WARN_ON(!lockdep_rtnl_is_held());
 
-	phylink_run_resolve_and_disable(pl, PHYLINK_DISABLE_LINK);
+	set_bit(PHYLINK_DISABLE_LINK, &pl->phylink_disable_state);
+	queue_work(system_power_efficient_wq, &pl->resolve);
+	flush_work(&pl->resolve);
 }
 
 static void phylink_sfp_link_up(void *upstream)

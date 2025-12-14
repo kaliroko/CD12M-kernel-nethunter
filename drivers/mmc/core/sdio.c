@@ -662,6 +662,8 @@ try_again:
 	 */
 	if (!powered_resume && !mmc_host_is_spi(host)) {
 		err = mmc_send_relative_addr(host, &card->rca);
+		if(err)
+			err = mmc_send_relative_addr(host, &card->rca);
 		if (err)
 			goto remove;
 
@@ -727,7 +729,7 @@ try_again:
 				retries = 0;
 				goto try_again;
 			} else {
-				goto remove;
+				goto err;
 			}
 		}
 #ifdef CONFIG_MMC_EMBEDDED_SDIO
@@ -1114,6 +1116,8 @@ int mmc_attach_sdio(struct mmc_host *host)
 	 * Detect and init the card.
 	 */
 	err = mmc_sdio_init_card(host, rocr, NULL, 0);
+	if (err)
+		err = mmc_sdio_init_card(host, rocr, NULL, 0);
 	if (err)
 		goto err;
 
