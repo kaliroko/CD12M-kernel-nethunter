@@ -90,6 +90,40 @@ static snd_pcm_uframes_t snd_usb_pcm_pointer(struct snd_pcm_substream *substream
 	return hwptr_done / (substream->runtime->frame_bits >> 3);
 }
 
+static int sprd_usb_aud_ofld_en(struct snd_usb_audio *chip, int stream)
+{
+	if (stream != SNDRV_PCM_STREAM_PLAYBACK &&
+		stream != SNDRV_PCM_STREAM_CAPTURE) {
+		pr_err("%s invalid stream %d\n", __func__, stream);
+		return 0;
+	}
+
+	if (!chip) {
+		pr_err("%s chip is null stream =%d\n", __func__, stream);
+		return 0;
+	}
+
+	return chip->usb_aud_ofld_en[stream];
+}
+
+static int sprd_ofld_synctype_ignore(struct snd_usb_audio *chip,
+	int stream, int attr)
+{
+	if (!sprd_usb_aud_ofld_en(chip, stream)) {
+		pr_debug("not enable usb audio offload, can't ignore\n");
+		return 0;
+	}
+	if (attr != USB_ENDPOINT_SYNC_SYNC) {
+		pr_debug("offload ignore synctype stream %s sync_type %d\n",
+			stream ? "capture" : "playback", attr);
+		return 1;
+	}
+	pr_debug("stream %s sync_type is %d\n",
+		stream ? "capture" : "playback", attr);
+
+	return 0;
+}
+
 /*
  * find a matching audio format
  */
@@ -98,6 +132,10 @@ static struct audioformat *find_format(struct snd_usb_substream *subs)
 	struct audioformat *fp;
 	struct audioformat *found = NULL;
 	int cur_attr = 0, attr;
+	int ignore;
+	struct snd_usb_audio *chip;
+
+	chip = subs->stream ? subs->stream->chip : NULL;
 
 	list_for_each_entry(fp, &subs->fmt_list, list) {
 		if (!(fp->formats & pcm_format_to_bits(subs->pcm_format)))
@@ -116,6 +154,13 @@ static struct audioformat *find_format(struct snd_usb_substream *subs)
 				continue;
 		}
 		attr = fp->ep_attr & USB_ENDPOINT_SYNCTYPE;
+		ignore = sprd_ofld_synctype_ignore(chip, subs->direction, attr);
+		if (ignore) {
+			pr_debug("ofld_en %d, stream %d, sync_type %#x, ignore this audiofmt\n",
+				sprd_usb_aud_ofld_en(chip, subs->direction),
+				subs->direction, attr);
+			continue;
+		}
 		if (! found) {
 			found = fp;
 			cur_attr = attr;
@@ -313,9 +358,6 @@ static int search_roland_implicit_fb(struct usb_device *dev, int ifnum,
 	return 0;
 }
 
-/* Setup an implicit feedback endpoint from a quirk. Returns 0 if no quirk
- * applies. Returns 1 if a quirk was found.
- */
 static int set_sync_ep_implicit_fb_quirk(struct snd_usb_substream *subs,
 					 struct usb_device *dev,
 					 struct usb_interface_descriptor *altsd,
@@ -394,7 +436,7 @@ add_sync_ep:
 
 	subs->data_endpoint->sync_master = subs->sync_endpoint;
 
-	return 1;
+	return 0;
 }
 
 static int set_sync_endpoint(struct snd_usb_substream *subs,
@@ -432,10 +474,6 @@ static int set_sync_endpoint(struct snd_usb_substream *subs,
 	err = set_sync_ep_implicit_fb_quirk(subs, dev, altsd, attr);
 	if (err < 0)
 		return err;
-
-	/* endpoint set by quirk */
-	if (err > 0)
-		return 0;
 
 	if (altsd->bNumEndpoints < 2)
 		return 0;

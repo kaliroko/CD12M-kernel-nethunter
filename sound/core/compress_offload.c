@@ -529,8 +529,7 @@ static int snd_compress_check_input(struct snd_compr_params *params)
 {
 	/* first let's check the buffer parameter's */
 	if (params->buffer.fragment_size == 0 ||
-	    params->buffer.fragments > INT_MAX / params->buffer.fragment_size ||
-	    params->buffer.fragments == 0)
+	    params->buffer.fragments > INT_MAX / params->buffer.fragment_size)
 		return -EINVAL;
 
 	/* now codec parameters */
@@ -670,10 +669,11 @@ static int snd_compr_pause(struct snd_compr_stream *stream)
 {
 	int retval;
 
-	if (stream->runtime->state != SNDRV_PCM_STATE_RUNNING)
+	if (stream->runtime->state != SNDRV_PCM_STATE_RUNNING &&
+			stream->runtime->state != SNDRV_PCM_STATE_DRAINING)
 		return -EPERM;
 	retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_PUSH);
-	if (!retval)
+	if (!retval && stream->runtime->state == SNDRV_PCM_STATE_RUNNING)
 		stream->runtime->state = SNDRV_PCM_STATE_PAUSED;
 	return retval;
 }
@@ -682,10 +682,11 @@ static int snd_compr_resume(struct snd_compr_stream *stream)
 {
 	int retval;
 
-	if (stream->runtime->state != SNDRV_PCM_STATE_PAUSED)
+	if (stream->runtime->state != SNDRV_PCM_STATE_PAUSED &&
+			stream->runtime->state != SNDRV_PCM_STATE_DRAINING)
 		return -EPERM;
 	retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_RELEASE);
-	if (!retval)
+	if (!retval && stream->runtime->state == SNDRV_PCM_STATE_PAUSED)
 		stream->runtime->state = SNDRV_PCM_STATE_RUNNING;
 	return retval;
 }
