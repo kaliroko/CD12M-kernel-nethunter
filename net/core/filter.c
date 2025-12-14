@@ -3102,10 +3102,7 @@ BPF_CALL_5(bpf_setsockopt, struct bpf_sock_ops_kern *, bpf_sock,
 			sk->sk_rcvlowat = val ? : 1;
 			break;
 		case SO_MARK:
-			if (sk->sk_mark != val) {
-				sk->sk_mark = val;
-				sk_dst_reset(sk);
-			}
+			sk->sk_mark = val;
 			break;
 		default:
 			ret = -EINVAL;
@@ -3131,7 +3128,7 @@ BPF_CALL_5(bpf_setsockopt, struct bpf_sock_ops_kern *, bpf_sock,
 			/* Only some options are supported */
 			switch (optname) {
 			case TCP_BPF_IW:
-				if (val <= 0 || tp->data_segs_out > tp->syn_data)
+				if (val <= 0 || tp->data_segs_out > 0)
 					ret = -EINVAL;
 				else
 					tp->snd_cwnd = val;

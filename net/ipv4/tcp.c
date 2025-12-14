@@ -286,6 +286,8 @@ int sysctl_tcp_min_tso_segs __read_mostly = 2;
 
 int sysctl_tcp_autocorking __read_mostly = 1;
 
+int sysctl_tcp_enable_nuke_addr __read_mostly = 1;
+
 struct percpu_counter tcp_orphan_count;
 EXPORT_SYMBOL_GPL(tcp_orphan_count);
 
@@ -2347,6 +2349,7 @@ int tcp_disconnect(struct sock *sk, int flags)
 	tp->write_seq += tp->max_window + 2;
 	if (tp->write_seq == 0)
 		tp->write_seq = 1;
+	icsk->icsk_backoff = 0;
 	tp->snd_cwnd = 2;
 	icsk->icsk_probes_out = 0;
 	tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
@@ -3404,6 +3407,10 @@ EXPORT_SYMBOL_GPL(tcp_done);
 
 int tcp_abort(struct sock *sk, int err)
 {
+	/* Ugly... We should find a better solution :( */
+	if (!sysctl_tcp_enable_nuke_addr)
+		return -EOPNOTSUPP;
+
 	if (!sk_fullsock(sk)) {
 		if (sk->sk_state == TCP_NEW_SYN_RECV) {
 			struct request_sock *req = inet_reqsk(sk);
