@@ -12,9 +12,11 @@
  */
 
 #include <drm/drm_atomic_helper.h>
+#include <linux/backlight.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
+#include <linux/pm_runtime.h>
 #include <video/mipi_display.h>
 #include <video/of_display_timing.h>
 #include <video/videomode.h>
@@ -24,6 +26,52 @@
 #include "sysfs/sysfs_display.h"
 
 #define SPRD_MIPI_DSI_FMT_DSC 0xff
+
+/* Backlight mode definitions */
+#define BACKLIGHT_MODE_BYPASS		0
+#define BACKLIGHT_MODE_DIRECT		1
+#define BACKLIGHT_MODE_DUTY_DET_PWM	2
+#define BACKLIGHT_MODE_DUTY_DET_ANALOG	3
+#define BACKLIGHT_MODE_DUTY_DET_MIXED	4
+#define BACKLIGHT_MODE_EXT_R_SINK	5
+#define BACKLIGHT_MODE_MAX		6
+
+/* Backlight control mode definitions */
+#define BACKLIGHT_CTRL_IDAC		0
+#define BACKLIGHT_CTRL_PWM		1
+#define BACKLIGHT_CTRL_DEFAULT		BACKLIGHT_CTRL_PWM
+
+/* Default PWM frequency to 20kHz and Max 33kHz */
+#define BACKLIGHT_FREQ_DEFAULT		0	/* 20kHz */
+#define BACKLIGHT_FREQ_MIN		20480
+#define BACKLIGHT_FREQ_MAX		34816
+
+/* PWM output duty range 0 ~ 256 */
+#define BACKLIGHT_PWM_DUTY_MAX		255	/* 100% */
+
+/* IDAC, Max = 40960 uA = 160uA * 255 steps */
+#define BACKLIGHT_IDAC_MAX		40960
+#define BACKLIGHT_IDAC_DEFAULT		0
+
+/* This is for Direct mode/GPIO mode to set PWM default */
+#define BACKLIGHT_PWM_DEFAULT		1000
+
+#define BACKLIGHT_VDAC_MAX		1600000	/* uA */
+#define BACKLIGHT_VDAC_MIN		20000	/* uA */
+#define BACKLIGHT_VDAC_DEFAULT		0x95
+#define BACKLIGHT_VDAC_SEL_DEFAULT	0x0
+
+#define BACKLIGHT_PWM_DUTY_THRESH_MAX	255
+#define BACKLIGHT_PWM_DUTY_THRESH_DEFAULT 50
+
+#define BACKLIGHT_PWM_BRIGHTNESS_MAX	0xFFFF
+#define BACKLIGHT_PWM_BRIGHTNESS_DEFAULT 100
+
+#define BACKLIGHT_MIN_PWM_FREQ		25	/* kHz */
+#define BACKLIGHT_IN_PWM_FREQ_STD	30	/* kHz */
+#define BACKLIGHT_MAX_PWM_FREQ		35	/* kHz */
+
+static DEFINE_MUTEX(panel_lock);
 
 const char *lcd_name;
 static int __init lcd_name_get(char *str)
@@ -143,6 +191,7 @@ static int sprd_panel_disable(struct drm_panel *p)
 
 	DRM_INFO("%s()\n", __func__);
 
+	mutex_lock(&panel_lock);
 	/*
 	 * FIXME:
 	 * The cancel work should be executed before DPU stop,
@@ -166,6 +215,9 @@ static int sprd_panel_disable(struct drm_panel *p)
 			     panel->info.cmds[CMD_CODE_SLEEP_IN],
 			     panel->info.cmds_len[CMD_CODE_SLEEP_IN]);
 
+	panel->is_enabled = false;
+	mutex_unlock(&panel_lock);
+
 	return 0;
 }
 
@@ -175,6 +227,7 @@ static int sprd_panel_enable(struct drm_panel *p)
 
 	DRM_INFO("%s()\n", __func__);
 
+	mutex_lock(&panel_lock);
 	sprd_panel_send_cmds(panel->slave,
 			     panel->info.cmds[CMD_CODE_INIT],
 			     panel->info.cmds_len[CMD_CODE_INIT]);
@@ -190,6 +243,9 @@ static int sprd_panel_enable(struct drm_panel *p)
 				      msecs_to_jiffies(1000));
 		panel->esd_work_pending = true;
 	}
+
+	panel->is_enabled = true;
+	mutex_unlock(&panel_lock);
 
 	return 0;
 }
@@ -581,6 +637,16 @@ static int sprd_panel_parse_dt(struct device_node *np, struct sprd_panel *panel)
 	info->mode.vrefresh = drm_mode_vrefresh(&info->mode);
 	of_get_buildin_modes(info, lcd_node);
 
+	/* Parse backlight related properties */
+	rc = of_property_read_u32(lcd_node, "sprd,max-brightness", &val);
+	if (!rc) {
+		if (val <= BACKLIGHT_PWM_BRIGHTNESS_MAX)
+			info->cmds_len[CMD_OLED_BRIGHTNESS] = val;
+		else
+			info->cmds_len[CMD_OLED_BRIGHTNESS] = BACKLIGHT_PWM_BRIGHTNESS_DEFAULT;
+	} else
+		info->cmds_len[CMD_OLED_BRIGHTNESS] = BACKLIGHT_PWM_BRIGHTNESS_DEFAULT;
+
 	return 0;
 }
 
@@ -594,6 +660,97 @@ static int sprd_panel_device_create(struct device *parent,
 	dev_set_drvdata(&panel->dev, panel);
 
 	return device_register(&panel->dev);
+}
+
+static int sprd_backlight_set_brightness(struct backlight_device *bdev)
+{
+	int level, brightness;
+	struct sprd_backlight *backlight = bl_get_data(bdev);
+	struct sprd_panel *panel = backlight->panel;
+
+	mutex_lock(&panel_lock);
+	if (!panel->is_enabled) {
+		mutex_unlock(&panel_lock);
+		DRM_WARN("panel has been powered off\n");
+		return -ENXIO;
+	}
+
+	brightness = bdev->props.brightness;
+	level = brightness * backlight->max_level / 255;
+
+	DRM_INFO("%s level: %d\n", __func__, level);
+
+	if (backlight->cmds_total == 1) {
+		backlight->cmds[0]->payload[1] = level;
+		sprd_panel_send_cmds(panel->slave,
+			     backlight->cmds[0],
+			     backlight->cmd_len);
+	} else
+		sprd_panel_send_cmds(panel->slave,
+			     backlight->cmds[level],
+			     backlight->cmd_len);
+
+	mutex_unlock(&panel_lock);
+
+	return 0;
+}
+
+static const struct backlight_ops sprd_backlight_ops = {
+	.update_status = sprd_backlight_set_brightness,
+};
+
+static int sprd_backlight_init(struct sprd_panel *panel)
+{
+	struct sprd_backlight *backlight;
+	struct device_node *bl_node;
+	struct panel_info *info = &panel->info;
+	const void *p;
+	int bytes, rc;
+	u32 temp;
+
+	bl_node = of_get_child_by_name(info->of_node,
+				"backlight");
+	if (!bl_node)
+		return 0;
+
+	backlight = devm_kzalloc(&panel->dev,
+			sizeof(struct sprd_backlight), GFP_KERNEL);
+	if (!backlight)
+		return -ENOMEM;
+
+	backlight->bdev = devm_backlight_device_register(&panel->dev,
+			"sprd_backlight", &panel->dev, backlight,
+			&sprd_backlight_ops, NULL);
+	if (IS_ERR(backlight->bdev)) {
+		DRM_ERROR("failed to register backlight ops\n");
+		return PTR_ERR(backlight->bdev);
+	}
+
+	p = of_get_property(bl_node, "brightness-levels", &bytes);
+	if (p) {
+		info->cmds[CMD_OLED_BRIGHTNESS] = p;
+		info->cmds_len[CMD_OLED_BRIGHTNESS] = bytes;
+	} else
+		DRM_ERROR("can't find brightness-levels property\n");
+
+	rc = of_property_read_u32(bl_node, "default-brightness-level", &temp);
+	if (!rc)
+		backlight->bdev->props.brightness = temp;
+	else
+		backlight->bdev->props.brightness = 25;
+
+	rc = of_property_read_u32(bl_node, "sprd,max-level", &temp);
+	if (!rc)
+		backlight->max_level = temp;
+	else
+		backlight->max_level = 255;
+
+	backlight->bdev->props.max_brightness = 255;
+	backlight->panel = panel;
+
+	DRM_INFO("%s() ok\n", __func__);
+
+	return 0;
 }
 
 static int sprd_panel_probe(struct mipi_dsi_device *slave)
@@ -660,6 +817,12 @@ static int sprd_panel_probe(struct mipi_dsi_device *slave)
 	ret = drm_panel_add(&panel->base);
 	if (ret) {
 		DRM_ERROR("drm_panel_add() failed\n");
+		return ret;
+	}
+
+	ret = sprd_backlight_init(panel);
+	if (ret) {
+		DRM_ERROR("backlight init failed\n");
 		return ret;
 	}
 

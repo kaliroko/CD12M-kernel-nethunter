@@ -21,6 +21,7 @@
 #include <linux/backlight.h>
 #include <linux/of.h>
 #include <linux/regulator/consumer.h>
+#include <linux/types.h>
 #include <linux/workqueue.h>
 
 enum {
@@ -44,6 +45,11 @@ enum {
 	SPRD_DSI_MODE_VIDEO_BURST,
 	SPRD_DSI_MODE_VIDEO_SYNC_PULSE,
 	SPRD_DSI_MODE_VIDEO_SYNC_EVENT,
+};
+
+enum {
+	ESD_MODE_REG_CHECK,
+	ESD_MODE_TE_CHECK,
 };
 
 struct dsi_cmd_desc {
@@ -101,6 +107,19 @@ struct sprd_panel {
 	struct regulator *supply;
 	struct delayed_work esd_work;
 	bool esd_work_pending;
+	bool is_enabled;
 };
+
+struct sprd_backlight {
+	struct backlight_device *bdev;
+	struct sprd_panel *panel;
+	struct dsi_cmd_desc *cmds[255];
+	int cmd_len;
+	int cmds_total;
+	int max_level;
+};
+
+int sprd_panel_parse_lcddtb(struct device_node *lcd_node,
+	struct sprd_panel *panel);
 
 #endif
