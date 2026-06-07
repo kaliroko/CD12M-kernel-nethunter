@@ -1,6 +1,53 @@
 Linux kernel
 ============
+# Kali NetHunter Kernel for CD12M (xintaiqi_uws6152_1h10)
 
+Custom kernel for the **CD12M** device (based on `xintaiqi_uws6152_1h10` platform) with full Kali NetHunter support.
+
+## Features
+
+- Built from official Android kernel source with NetHunter patches
+- Wireless external adapter support (RTL88xx, MT76xx, Atheros AR9271, etc.)
+- HID keyboard / mouse attack support
+- USB gadget support (RNDIS, ECM, HID)
+- DriveDroid / CDROM emulation
+- SELinux permissive (optional)
+- Additional TCP congestion algorithms
+- Loadable module support for NetHunter chroot
+
+## Device Info
+
+- **Codename:** CD12M
+- **Base kernel:** `xintaiqi_uws6152_1h10_test`
+- **Defconfig:** `cd12m_defconfig` (or your custom defconfig)
+
+## Build Instructions
+
+### Prerequisites
+
+- Linux build environment (Ubuntu / Kali recommended)
+- `build-essential`, `bc`, `bison`, `flex`, `libssl-dev`, `git`, `device-tree-compiler`
+- Cross-compiler toolchain (e.g., `aarch64-linux-gnu-` or `arm-linux-gnueabi-` depending on arch)
+
+### Compilation Steps
+
+```bash
+# Clone the kernel source
+git clone https://github.com/kaliroko/kernel_kali-nethunter_cd12m.git
+cd kernel_kali-nethunter_cd12m
+
+# Set environment variables
+export ARCH=arm64                               # or arm
+export CROSS_COMPILE=aarch64-linux-gnu-         # adjust for your toolchain
+export PATH=/path/to/toolchain/bin:$PATH
+
+# Clean and prepare config
+make clean
+make mrproper
+make cd12m_defconfig    # or your actual defconfig
+
+# Build the kernel
+make -j$(nproc)
 This file was moved to Documentation/admin-guide/README.rst
 
 Please notice that there are several guides for kernel developers and users.
