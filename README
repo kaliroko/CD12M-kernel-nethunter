@@ -16,3 +16,10 @@ See Documentation/00-INDEX for a list of what is contained in each file.
 Please read the Documentation/process/changes.rst file, as it contains the
 requirements for building and running the kernel, and information about
 the problems which may result by upgrading your kernel.
+
+root@kali /kali-nethunter-kernel-builder/android_kernel_xintaiqi_uws6152_1h10_test-cd12m                                           [15:54:41]
+> # tar czf kernel-source.tar.gz .
+
+
+
+tar: .: 在我们读入文件时文件发生了变化
