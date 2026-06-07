@@ -16,3 +16,6 @@ See Documentation/00-INDEX for a list of what is contained in each file.
 Please read the Documentation/process/changes.rst file, as it contains the
 requirements for building and running the kernel, and information about
 the problems which may result by upgrading your kernel.
+
+%Linux version 4.14.98 (yewaiguo@divo95-PowerEdge-R730) (gcc version 4.9.x 20150123 (prerelease)% (GCC)) #1 SMP PREEMPT Tue Apr 7 21:22:30 CST 2026
+gcc version 4.9.x 20150123 (prerelease) (GCC)) #1 SMP PREEMPT Tue Apr 7 21:22:30 CST 2026
