@@ -3,7 +3,7 @@
 > 专为 **CD12M** 设备适配的 Kali NetHunter 攻击内核  
 > 基于 `xintaiqi_uws6152_1h10_test` 源码构建 | 支持外接无线网卡 / HID 攻击 / USB 伪装
 
-## ⚙️ 核心内核配置 (defconfig 节选)
+##  核心内核配置 (defconfig 节选)
 
 **文件：`arch/arm64/configs/cd12m_defconfig`**
 
@@ -43,7 +43,7 @@ CONFIG_SECURITY_SELINUX_DEVELOP=y
 
 ---
 
-## 🌳 设备树关键节点 (dts)
+##  设备树关键节点 (dts)
 
 **设备：CD12M**  
 **文件：`arch/arm64/boot/dts/.../cd12m.dts` (示例)**
@@ -77,7 +77,7 @@ CONFIG_SECURITY_SELINUX_DEVELOP=y
 
 ---
 
-## 🧠 Kali NetHunter 补丁栈（关键 patch 摘要）
+##  Kali NetHunter 补丁栈（关键 patch 摘要）
 
 以下补丁已被直接合并进本内核树：
 
@@ -97,7 +97,7 @@ diff --git a/drivers/usb/gadget/function/f_hid.c b/drivers/usb/gadget/function/f
 
 ---
 
-## 📦 快速编译
+## 编译
 
 ```bash
 # 设置架构和交叉编译工具链
@@ -115,18 +115,18 @@ ls -lh arch/arm64/boot/Image.gz
 
 ---
 
-## 🚀 刷入方式
+## 刷入方式
 
 ```bash
 # 使用 AnyKernel3 或 mkbootimg 打包 boot.img
-fastboot flash boot boot.img
-fastboot reboot
+spd_dump boot
+
 ```
 
 完成后安装 NetHunter App 并部署 rootfs 即可开始使用。
 
 ---
 
-## ⚠️ 免责
+## 免责
 
 仅用于安全研究或经过授权的测试。刷入本内核可能丢失数据、损坏设备，请自行承担风险。
