@@ -115,11 +115,11 @@ ls -lh arch/arm64/boot/Image.gz
 
 ---
 
-## 刷入方式
+## 刷入
 
 ```bash
 # 使用 AnyKernel3 或 mkbootimg 打包 boot.img
-spd_dump boot
+*spd_dump boot boot.img*
 
 ```
 
