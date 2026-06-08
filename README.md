@@ -1,5 +1,7 @@
 # Kali NetHunter kernel - CD12M (xintaiqi_uws6152_1h10)
 
+Linux version 4.14.98-Kali-Nethunter (RP2Plus@MC_Server) (gcc version 15.2.0 (Debian 15.2.0-17)) #1 SMP PREEMPT Mon Jun 8 07:32:42 UTC 2026
+
 > 为 **CD12M cd20m** 设备适配的 Kali NetHunter kernel  
 > 基于 `xintaiqi_uws6152_1h10_test` 源码构建 | 支持外接无线网卡 / HID 攻击 / USB 伪装
 
