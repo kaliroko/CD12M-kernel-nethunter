@@ -1,6 +1,6 @@
 # Kali NetHunter 内核 - CD12M (xintaiqi_uws6152_1h10)
 
-> 专为 **CD12M** 设备适配的 Kali NetHunter 攻击内核  
+> 为 **CD12M cd20m** 设备适配的 Kali NetHunter 攻击内核  
 > 基于 `xintaiqi_uws6152_1h10_test` 源码构建 | 支持外接无线网卡 / HID 攻击 / USB 伪装
 
 ##  核心内核配置 (defconfig 节选)
